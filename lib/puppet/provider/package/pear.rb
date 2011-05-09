@@ -1,25 +1,23 @@
 require 'puppet/provider/package'
 require 'uri'
 
-# Ruby gems support.
-Puppet::Type.type(:package).provide :gem, :parent => Puppet::Provider::Package do
-  desc "Ruby Gem support.  If a URL is passed via `source`, then that URL is used as the
-    remote gem repository; if a source is present but is not a valid URL, it will be
-    interpreted as the path to a local gem file.  If source is not present at all,
-    the gem will be installed from the default gem repositories."
+# Ruby pears support.
+Puppet::Type.type(:package).provide :pear, :parent => Puppet::Provider::Package do
+  desc "PHP PEAR support.  A channel URL must passed via `source`. That URL is used as the
+    channel repository."
 
   has_feature :versionable
 
-  commands :gemcmd => "gem"
+  commands :pearcmd => "pear"
 
-  def self.gemlist(hash)
-    command = [command(:gemcmd), "list"]
+  def self.pearlist(hash)
+    command = [command(:pearcmd), "list"]
 
-    if hash[:local]
-      command << "--local"
-    else
-      command << "--remote"
-    end
+#    if hash[:local]
+#      command << "--local"
+#    else
+#      command << "--remote"
+#    end
 
     if name = hash[:justme]
       command << name
@@ -27,15 +25,15 @@ Puppet::Type.type(:package).provide :gem, :parent => Puppet::Provider::Package d
 
     begin
       list = execute(command).split("\n").collect do |set|
-        if gemhash = gemsplit(set)
-          gemhash[:provider] = :gem
-          gemhash
+        if pearhash = pearsplit(set)
+          pearhash[:provider] = :pear
+          pearhash
         else
           nil
         end
       end.compact
     rescue Puppet::ExecutionFailure => detail
-      raise Puppet::Error, "Could not list gems: #{detail}"
+      raise Puppet::Error, "Could not list pears: #{detail}"
     end
 
     if hash[:justme]
@@ -45,10 +43,9 @@ Puppet::Type.type(:package).provide :gem, :parent => Puppet::Provider::Package d
     end
   end
 
-  def self.gemsplit(desc)
+  def self.pearsplit(desc)
     case desc
-    when /^\*\*\*/, /^\s*$/, /^\s+/; return nil
-    when /^(\S+)\s+\((.+)\)/
+    when /(^\S+)\s+(((\d\.)+).)/
       name = $1
       version = $2.split(/,\s*/)[0]
       return {
@@ -62,16 +59,16 @@ Puppet::Type.type(:package).provide :gem, :parent => Puppet::Provider::Package d
   end
 
   def self.instances(justme = false)
-    gemlist(:local => true).collect do |hash|
+    pearlist(:local => true).collect do |hash|
       new(hash)
     end
   end
 
   def install(useversion = true)
-    command = [command(:gemcmd), "install"]
+    command = [command(:pearcmd), "install"]
     command << "-v" << resource[:ensure] if (! resource[:ensure].is_a? Symbol) and useversion
     # Always include dependencies
-    command << "--include-dependencies"
+    command << "--alldeps"
 
     if source = resource[:source]
       begin
@@ -88,9 +85,9 @@ Puppet::Type.type(:package).provide :gem, :parent => Puppet::Provider::Package d
         command << uri.path
       when 'puppet'
         # we don't support puppet:// URLs (yet)
-        raise Puppet::Error.new("puppet:// URLs are not supported as gem sources")
+        raise Puppet::Error.new("puppet:// URLs are not supported as pear sources")
       else
-        # interpret it as a gem repository
+        # interpret it as a pear repository
         command << "--source" << "#{source}" << resource[:name]
       end
     else
@@ -98,23 +95,23 @@ Puppet::Type.type(:package).provide :gem, :parent => Puppet::Provider::Package d
     end
 
     output = execute(command)
-    # Apparently some stupid gem versions don't exit non-0 on failure
+    # Apparently some stupid pear versions don't exit non-0 on failure
     self.fail "Could not install: #{output.chomp}" if output.include?("ERROR")
   end
 
   def latest
     # This always gets the latest version available.
-    hash = self.class.gemlist(:justme => resource[:name])
+    hash = self.class.pearlist(:justme => resource[:name])
 
     hash[:ensure]
   end
 
   def query
-    self.class.gemlist(:justme => resource[:name], :local => true)
+    self.class.pearlist(:justme => resource[:name], :local => true)
   end
 
   def uninstall
-    gemcmd "uninstall", "-x", "-a", resource[:name]
+    pearcmd "uninstall", "-x", "-a", resource[:name]
   end
 
   def update

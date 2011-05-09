@@ -62,7 +62,7 @@ Puppet::Type.type(:package).provide :pecl, :parent => Puppet::Provider::Package 
     command = [command(:peclcmd), "install"]
     command << "-v" << resource[:ensure] if (! resource[:ensure].is_a? Symbol) and useversion
     # Always include dependencies
-    command << "--include-dependencies"
+    command << "--alldeps"
 
     if source = resource[:source]
       begin
@@ -89,7 +89,7 @@ Puppet::Type.type(:package).provide :pecl, :parent => Puppet::Provider::Package 
     end
 
     output = execute(command)
-    # Apparently some stupid gem versions don't exit non-0 on failure
+    # Apparently some stupid pecl versions don't exit non-0 on failure
     self.fail "Could not install: #{output.chomp}" if output.include?("ERROR")
   end
 
