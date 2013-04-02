@@ -1,18 +1,19 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/resource/status'
 
 describe Puppet::Resource::Status do
+  include PuppetSpec::Files
+
   before do
-    @resource = Puppet::Type.type(:file).new :path => "/my/file"
+    @resource = Puppet::Type.type(:file).new :path => make_absolute("/my/file")
     @status = Puppet::Resource::Status.new(@resource)
   end
 
   it "should compute type and title correctly" do
     @status.resource_type.should == "File"
-    @status.title.should == "/my/file"
+    @status.title.should == make_absolute("/my/file")
   end
 
   [:node, :file, :line, :current_values, :status, :evaluation_time].each do |attr|
@@ -147,7 +148,7 @@ describe Puppet::Resource::Status do
       @status.line = 27
       @status.evaluation_time = 2.7
       @status.tags = %w{one two}
-      @status.to_yaml_properties.should == Puppet::Resource::Status::YAML_ATTRIBUTES.sort
+      @status.to_yaml_properties.should =~ Puppet::Resource::Status::YAML_ATTRIBUTES
     end
   end
 end

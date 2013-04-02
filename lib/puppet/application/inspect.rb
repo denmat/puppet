@@ -1,10 +1,7 @@
-require 'puppet'
 require 'puppet/application'
-require 'puppet/file_bucket/dipper'
 
 class Puppet::Application::Inspect < Puppet::Application
 
-  should_parse_config
   run_mode :agent
 
   option("--debug","-d")
@@ -20,7 +17,7 @@ class Puppet::Application::Inspect < Puppet::Application
   end
 
   def help
-    <<-HELP
+    <<-'HELP'
 
 puppet-inspect(8) -- Send an inspection report
 ========
@@ -33,7 +30,7 @@ Prepares and submits an inspection report to the puppet master.
 
 USAGE
 -----
-puppet inspect
+puppet inspect [--archive_files] [--archive_file_server]
 
 
 DESCRIPTION
@@ -59,6 +56,14 @@ configuration file documentation at
 http://docs.puppetlabs.com/references/latest/configuration.html for
 the full list of acceptable settings.
 
+* --archive_files:
+  During an inspect run, whether to archive files whose contents are audited to
+  a file bucket.
+
+* --archive_file_server:
+  During an inspect run, the file bucket server to archive files to if
+  archive_files is set.  The default value is '$server'.
+
 
 AUTHOR
 ------
@@ -68,9 +73,7 @@ Puppet Labs
 
 COPYRIGHT
 ---------
-
-Copyright (c) 2011 Puppet Labs, LLC
-Licensed under the GNU General Public License version 2
+Copyright (c) 2011 Puppet Labs, LLC Licensed under the Apache 2.0 License
 
     HELP
   end
@@ -100,6 +103,11 @@ Licensed under the GNU General Public License version 2
     Puppet::Resource::Catalog.indirection.terminus_class = :yaml
   end
 
+  def preinit
+    require 'puppet'
+    require 'puppet/file_bucket/dipper'
+  end
+
   def run_command
     benchmark(:notice, "Finished inspection") do
       retrieval_starttime = Time.now
@@ -109,6 +117,7 @@ Licensed under the GNU General Public License version 2
       end
 
       @report.configuration_version = catalog.version
+      @report.environment = Puppet[:environment]
 
       inspect_starttime = Time.now
       @report.add_times("config_retrieval", inspect_starttime - retrieval_starttime)
@@ -126,8 +135,7 @@ Licensed under the GNU General Public License version 2
         begin
           audited_resource = ral_resource.to_resource
         rescue StandardError => detail
-          puts detail.backtrace if Puppet[:trace]
-          ral_resource.err "Could not inspect #{ral_resource}; skipping: #{detail}"
+          ral_resource.log_exception(detail, "Could not inspect #{ral_resource}; skipping: #{detail}")
           audited_attributes.each do |name|
             event = ral_resource.event(
                                        :property => name,
@@ -155,7 +163,7 @@ Licensed under the GNU General Public License version 2
         end
         if Puppet[:archive_files] and ral_resource.type == :file and audited_attributes.include?(:content)
           path = ral_resource[:path]
-          if File.readable?(path)
+          if ::File.readable?(path)
             begin
               dipper.backup(path)
             rescue StandardError => detail
@@ -173,8 +181,7 @@ Licensed under the GNU General Public License version 2
       begin
         Puppet::Transaction::Report.indirection.save(@report)
       rescue => detail
-        puts detail.backtrace if Puppet[:trace]
-        Puppet.err "Could not send report: #{detail}"
+        Puppet.log_exception(detail, "Could not send report: #{detail}")
       end
     end
   end

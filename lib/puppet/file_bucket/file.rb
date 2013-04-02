@@ -8,18 +8,17 @@ class Puppet::FileBucket::File
   # There are mechanisms to save and load this file locally and remotely in puppet/indirector/filebucketfile/*
   # There is a compatibility class that emulates pre-indirector filebuckets in Puppet::FileBucket::Dipper
   extend Puppet::Indirector
-  require 'puppet/file_bucket/file/indirection_hooks'
-  indirects :file_bucket_file, :terminus_class => :file, :extend => Puppet::FileBucket::File::IndirectionHooks
+  indirects :file_bucket_file, :terminus_class => :selector
 
   attr :contents
   attr :bucket_path
 
-  def initialize( contents, options = {} )
-    raise ArgumentError if !contents.is_a?(String)
-    @contents  = contents
+  def initialize(contents, options = {})
+    raise ArgumentError.new("contents must be a String, got a #{contents.class}") unless contents.is_a?(String)
+    @contents = contents
 
     @bucket_path = options.delete(:bucket_path)
-    raise ArgumentError if options != {}
+    raise ArgumentError.new("Unknown option(s): #{options.keys.join(', ')}") unless options.empty?
   end
 
   def checksum_type
@@ -42,15 +41,15 @@ class Puppet::FileBucket::File
     "#{checksum_type}/#{checksum_data}"
   end
 
-  def self.from_s( contents )
-    self.new( contents )
+  def self.from_s(contents)
+    self.new(contents)
   end
 
   def to_pson
     { "contents" => contents }.to_pson
   end
 
-  def self.from_pson( pson )
-    self.new( pson["contents"] )
+  def self.from_pson(pson)
+    self.new(pson["contents"])
   end
 end

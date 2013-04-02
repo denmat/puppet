@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet_spec/files'
 require 'puppet/file_bucket/dipper'
@@ -13,7 +12,7 @@ describe Puppet::Type.type(:tidy) do
   end
 
   # Testing #355.
-  it "should be able to remove dead links" do
+  it "should be able to remove dead links", :unless => Puppet.features.microsoft_windows? do
     dir = tmpfile("tidy_link_testing")
     link = File.join(dir, "link")
     target = tmpfile("no_such_file_tidy_link_testing")

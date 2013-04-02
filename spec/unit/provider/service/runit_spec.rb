@@ -1,10 +1,10 @@
-#!/usr/bin/env ruby
+#! /usr/bin/env ruby
 #
 # Unit testing for the Runit service Provider
 #
 # author Brice Figureau
 #
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+require 'spec_helper'
 
 provider_class = Puppet::Type.type(:service).provider(:runit)
 
@@ -69,6 +69,7 @@ describe provider_class do
 
       @provider.expects(:enabled?).returns :false
       @provider.expects(:enable)
+      @provider.stubs(:sleep)
 
       @provider.start
     end

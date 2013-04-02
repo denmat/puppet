@@ -1,32 +1,29 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2007-10-19.
-#  Copyright (c) 2007. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/indirector/file_server'
 require 'puppet/file_serving/configuration'
 
 describe Puppet::Indirector::FileServer do
 
-  before :each do
+  before :all do
     Puppet::Indirector::Terminus.stubs(:register_terminus_class)
     @model = mock 'model'
     @indirection = stub 'indirection', :name => :mystuff, :register_terminus_type => nil, :model => @model
     Puppet::Indirector::Indirection.stubs(:instance).returns(@indirection)
 
-    @file_server_class = Class.new(Puppet::Indirector::FileServer) do
-      def self.to_s
-        "Testing::Mytype"
-      end
+    module Testing; end
+    @file_server_class = class Testing::MyFileServer < Puppet::Indirector::FileServer
+      self
     end
+  end
 
+  before :each do
     @file_server = @file_server_class.new
 
     @uri = "puppet://host/my/local/file"
     @configuration = mock 'configuration'
-    Puppet::FileServing::Configuration.stubs(:create).returns(@configuration)
+    Puppet::FileServing::Configuration.stubs(:configuration).returns(@configuration)
 
     @request = Puppet::Indirector::Request.new(:myind, :mymethod, @uri, :environment => "myenv")
   end

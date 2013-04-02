@@ -1,6 +1,3 @@
-#  Created by Luke Kanies on 2006-11-07.
-#  Copyright (c) 2006. All rights reserved.
-
 class Puppet::Util::Feature
   attr_reader :path
 
@@ -13,7 +10,7 @@ class Puppet::Util::Feature
   # successfully.
   def add(name, options = {})
     method = name.to_s + "?"
-    raise ArgumentError, "Feature #{name} is already defined" if self.class.respond_to?(method)
+    @results.delete(name)
 
     if block_given?
       begin
@@ -26,7 +23,9 @@ class Puppet::Util::Feature
     end
 
     meta_def(method) do
-      @results[name] = test(name, options) unless @results.include?(name)
+      # Positive cache only, except blocks which are executed just once above
+      final = @results[name] || block_given?
+      @results[name] = test(name, options) unless final
       @results[name]
     end
   end

@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/node/facts'
 require 'puppet/indirector/facts/yaml'
@@ -26,7 +25,7 @@ describe Puppet::Node::Facts::Yaml do
 
   describe "#search" do
     def assert_search_matches(matching, nonmatching, query)
-      request = Puppet::Indirector::Request.new(:inventory, :search, nil, query)
+      request = Puppet::Indirector::Request.new(:inventory, :search, nil, nil, query)
 
       Dir.stubs(:glob).returns(matching.keys + nonmatching.keys)
       [matching, nonmatching].each do |examples|

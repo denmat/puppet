@@ -27,7 +27,7 @@ module Puppet::FileBucketFile
         raise "could not find diff_with #{request.options[:diff_with]}" unless ::File.exists?(file2_path)
         return `diff #{file_path.inspect} #{file2_path.inspect}`
       else
-        contents = ::File.read file_path
+        contents = IO.binread(file_path)
         Puppet.info "FileBucket read #{checksum}"
         model.new(contents)
       end
@@ -48,6 +48,10 @@ module Puppet::FileBucketFile
       instance.to_s
     end
 
+    def validate_key(request)
+      # There are no ACLs on filebucket files so validating key is not important
+    end
+
     private
 
     def path_match(dir_path, files_original_path)
@@ -55,7 +59,7 @@ module Puppet::FileBucketFile
       paths_path = ::File.join(dir_path, 'paths')
       return false unless ::File.exists?(paths_path)
       ::File.open(paths_path) do |f|
-        f.each do |line|
+        f.each_line do |line|
           return true if line.chomp == files_original_path
         end
       end
@@ -67,9 +71,10 @@ module Puppet::FileBucketFile
       dir_path = path_for(bucket_file.bucket_path, bucket_file.checksum_data)
       paths_path = ::File.join(dir_path, 'paths')
 
-      # If the file already exists, do nothing.
+      # If the file already exists, touch it.
       if ::File.exist?(filename)
         verify_identical_file!(bucket_file)
+        ::FileUtils.touch(filename)
       else
         # Make the directories if necessary.
         unless ::File.directory?(dir_path)
@@ -83,6 +88,7 @@ module Puppet::FileBucketFile
         # Write the file to disk.
         Puppet::Util.withumask(0007) do
           ::File.open(filename, ::File::WRONLY|::File::CREAT, 0440) do |of|
+            of.binmode
             of.print bucket_file.contents
           end
           ::File.open(paths_path, ::File::WRONLY|::File::CREAT, 0640) do |of|
@@ -121,7 +127,7 @@ module Puppet::FileBucketFile
     # If conflict_check is enabled, verify that the passed text is
     # the same as the text in our file.
     def verify_identical_file!(bucket_file)
-      disk_contents = ::File.read(path_for(bucket_file.bucket_path, bucket_file.checksum_data, 'contents'))
+      disk_contents = IO.binread(path_for(bucket_file.bucket_path, bucket_file.checksum_data, 'contents'))
 
       # If the contents don't match, then we've found a conflict.
       # Unlikely, but quite bad.

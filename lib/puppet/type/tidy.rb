@@ -43,17 +43,18 @@ Puppet::Type.newtype(:tidy) do
   end
 
   newparam(:matches) do
-    desc "One or more (shell type) file glob patterns, which restrict
+    desc <<-'EOT'
+      One or more (shell type) file glob patterns, which restrict
       the list of files to be tidied to those whose basenames match
       at least one of the patterns specified. Multiple patterns can
       be specified using an array.
 
       Example:
 
-          tidy { \"/tmp\":
-            age => \"1w\",
+          tidy { "/tmp":
+            age     => "1w",
             recurse => 1,
-            matches => [ \"[0-9]pub*.tmp\", \"*.temp\", \"tmpfile?\" ]
+            matches => [ "[0-9]pub*.tmp", "*.temp", "tmpfile?" ]
           }
 
       This removes files from `/tmp` if they are one week old or older,
@@ -68,7 +69,8 @@ Puppet::Type.newtype(:tidy) do
       for recurse if matches is used, as matches only apply to files found
       by recursion (there's no reason to use static patterns match against
       a statically determined path).  Requiering explicit recursion clears
-      up a common source of confusion."
+      up a common source of confusion.
+    EOT
 
     # Make sure we convert to an array.
     munge do |value|
@@ -87,8 +89,8 @@ Puppet::Type.newtype(:tidy) do
 
   newparam(:backup) do
     desc "Whether tidied files should be backed up.  Any values are passed
-      directly to the file resources used for actual file deletion, so use
-      its backup documentation to determine valid values."
+      directly to the file resources used for actual file deletion, so consult
+      the `file` type's backup documentation to determine valid values."
   end
 
   newparam(:age) do
@@ -99,17 +101,16 @@ Puppet::Type.newtype(:tidy) do
 
       Specifying 0 will remove all files."
 
-    @@ageconvertors = {
+    AgeConvertors = {
       :s => 1,
-      :m => 60
+      :m => 60,
+      :h => 60 * 60,
+      :d => 60 * 60 * 24,
+      :w => 60 * 60 * 24 * 7,
     }
 
-    @@ageconvertors[:h] = @@ageconvertors[:m] * 60
-    @@ageconvertors[:d] = @@ageconvertors[:h] * 24
-    @@ageconvertors[:w] = @@ageconvertors[:d] * 7
-
     def convert(unit, multi)
-      if num = @@ageconvertors[unit]
+      if num = AgeConvertors[unit]
         return num * multi
       else
         self.fail "Invalid age unit '#{unit}'"
@@ -143,19 +144,11 @@ Puppet::Type.newtype(:tidy) do
       the specified size.  Unqualified values are in kilobytes, but
       *b*, *k*, *m*, *g*, and *t* can be appended to specify *bytes*,
       *kilobytes*, *megabytes*, *gigabytes*, and *terabytes*, respectively.
-      Only the first character is significant, so the full word can also 
+      Only the first character is significant, so the full word can also
       be used."
 
-    @@sizeconvertors = {
-      :b => 0,
-      :k => 1,
-      :m => 2,
-      :g => 3,
-      :t => 4
-    }
-
     def convert(unit, multi)
-      if num = @@sizeconvertors[unit]
+      if num = { :b => 0, :k => 1, :m => 2, :g => 3, :t => 4 }[unit]
         result = multi
         num.times do result *= 1024 end
         return result
@@ -185,7 +178,7 @@ Puppet::Type.newtype(:tidy) do
   end
 
   newparam(:type) do
-    desc "Set the mechanism for determining age."
+    desc "Set the mechanism for determining age. Default: atime."
 
     newvalues(:atime, :mtime, :ctime)
 
@@ -209,7 +202,9 @@ Puppet::Type.newtype(:tidy) do
     []
   end
 
-  @depthfirst = true
+  def depthfirst?
+    true
+  end
 
   def initialize(hash)
     super
@@ -238,10 +233,6 @@ Puppet::Type.newtype(:tidy) do
     []
   end
 
-  def eval_generate
-    []
-  end
-
   def generate
     return [] unless stat(self[:path])
 
@@ -254,7 +245,7 @@ Puppet::Type.newtype(:tidy) do
 
     if parameter
       files = Puppet::FileServing::Fileset.new(self[:path], parameter).files.collect do |f|
-        f == "." ? self[:path] : File.join(self[:path], f)
+        f == "." ? self[:path] : ::File.join(self[:path], f)
       end
     else
       files = [self[:path]]
@@ -270,7 +261,7 @@ Puppet::Type.newtype(:tidy) do
     files_by_name = result.inject({}) { |hash, file| hash[file[:path]] = file; hash }
 
     files_by_name.keys.sort { |a,b| b <=> b }.each do |path|
-      dir = File.dirname(path)
+      dir = ::File.dirname(path)
       next unless resource = files_by_name[dir]
       if resource[:require]
         resource[:require] << Puppet::Resource.new(:file, path)
@@ -321,7 +312,7 @@ Puppet::Type.newtype(:tidy) do
 
   def stat(path)
     begin
-      File.lstat(path)
+      ::File.lstat(path)
     rescue Errno::ENOENT => error
       info "File does not exist"
       return nil

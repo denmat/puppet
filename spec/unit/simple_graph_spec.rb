@@ -1,9 +1,5 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2007-11-1.
-#  Copyright (c) 2006. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 require 'puppet/simple_graph'
 
 describe Puppet::SimpleGraph do
@@ -28,7 +24,7 @@ describe Puppet::SimpleGraph do
     @graph = Puppet::SimpleGraph.new
     @graph.add_edge(:one, :two)
 
-    proc { @graph.to_dot_graph }.should_not raise_error
+    expect { @graph.to_dot_graph }.to_not raise_error
   end
 
   describe "when managing vertices" do
@@ -49,7 +45,7 @@ describe Puppet::SimpleGraph do
 
     it "should ignore already-present vertices when asked to add a vertex" do
       @graph.add_vertex(:test)
-      proc { @graph.add_vertex(:test) }.should_not raise_error
+      expect { @graph.add_vertex(:test) }.to_not raise_error
     end
 
     it "should return true when asked if a vertex is present" do
@@ -76,7 +72,7 @@ describe Puppet::SimpleGraph do
     end
 
     it "should do nothing when a non-vertex is asked to be removed" do
-      proc { @graph.remove_vertex!(:one) }.should_not raise_error
+      expect { @graph.remove_vertex!(:one) }.to_not raise_error
     end
   end
 
@@ -267,48 +263,58 @@ describe Puppet::SimpleGraph do
     end
   end
 
-  describe "when sorting the graph" do
+  describe "when reporting cycles in the graph" do
     before do
       @graph = Puppet::SimpleGraph.new
     end
 
-    def add_edges(hash)
-      hash.each do |a,b|
-        @graph.add_edge(a, b)
+    # This works with `add_edges` to auto-vivify the resource instances.
+    let :vertex do
+      Hash.new do |hash, key|
+        hash[key] = Puppet::Type.type(:notify).new(:name => key.to_s)
       end
     end
 
-    it "should sort the graph topologically" do
-      add_edges :a => :b, :b => :c
-      @graph.topsort.should == [:a, :b, :c]
+    def add_edges(hash)
+      hash.each do |a,b|
+        @graph.add_edge(vertex[a], vertex[b])
+      end
+    end
+
+    def simplify(cycles)
+      cycles.map do |x|
+        x.map do |y|
+          y.to_s.match(/^Notify\[(.*)\]$/)[1]
+        end
+      end
     end
 
     it "should fail on two-vertex loops" do
       add_edges :a => :b, :b => :a
-      proc { @graph.topsort }.should raise_error(Puppet::Error)
+      expect { @graph.report_cycles_in_graph }.to raise_error(Puppet::Error)
     end
 
     it "should fail on multi-vertex loops" do
       add_edges :a => :b, :b => :c, :c => :a
-      proc { @graph.topsort }.should raise_error(Puppet::Error)
+      expect { @graph.report_cycles_in_graph }.to raise_error(Puppet::Error)
     end
 
     it "should fail when a larger tree contains a small cycle" do
       add_edges :a => :b, :b => :a, :c => :a, :d => :c
-      proc { @graph.topsort }.should raise_error(Puppet::Error)
+      expect { @graph.report_cycles_in_graph }.to raise_error(Puppet::Error)
     end
 
     it "should succeed on trees with no cycles" do
       add_edges :a => :b, :b => :e, :c => :a, :d => :c
-      proc { @graph.topsort }.should_not raise_error
+      expect { @graph.report_cycles_in_graph }.to_not raise_error
     end
 
     it "should produce the correct relationship text" do
       add_edges :a => :b, :b => :a
       # cycle detection starts from a or b randomly
       # so we need to check for either ordering in the error message
-      want = %r{Found 1 dependency cycle:\n\((a => b => a|b => a => b)\)\nTry}
-      expect { @graph.topsort }.to raise_error(Puppet::Error, want)
+      want = %r{Found 1 dependency cycle:\n\((Notify\[a\] => Notify\[b\] => Notify\[a\]|Notify\[b\] => Notify\[a\] => Notify\[b\])\)\nTry}
+      expect { @graph.report_cycles_in_graph }.to raise_error(Puppet::Error, want)
     end
 
     it "cycle discovery should be the minimum cycle for a simple graph" do
@@ -317,8 +323,8 @@ describe Puppet::SimpleGraph do
       add_edges "b" => "c"
 
       cycles = nil
-      expect { cycles = @graph.find_cycles_in_graph.sort }.should_not raise_error
-      cycles.should be == [["a", "b"]]
+      expect { cycles = @graph.find_cycles_in_graph }.to_not raise_error
+      simplify(cycles).should be == [["a", "b"]]
     end
 
     it "cycle discovery should handle two distinct cycles" do
@@ -326,8 +332,8 @@ describe Puppet::SimpleGraph do
       add_edges "b" => "b1", "b1" => "b"
 
       cycles = nil
-      expect { cycles = @graph.find_cycles_in_graph.sort }.should_not raise_error
-      cycles.should be == [["a", "a1"], ["b", "b1"]]
+      expect { cycles = @graph.find_cycles_in_graph }.to_not raise_error
+      simplify(cycles).should be == [["a1", "a"], ["b1", "b"]]
     end
 
     it "cycle discovery should handle two cycles in a connected graph" do
@@ -336,8 +342,8 @@ describe Puppet::SimpleGraph do
       add_edges "c" => "c1", "c1" => "c2", "c2" => "c3", "c3" => "c"
 
       cycles = nil
-      expect { cycles = @graph.find_cycles_in_graph.sort }.should_not raise_error
-      cycles.should be == [%w{a a1}, %w{c c1 c2 c3}]
+      expect { cycles = @graph.find_cycles_in_graph }.to_not raise_error
+      simplify(cycles).should be == [%w{a1 a}, %w{c1 c2 c3 c}]
     end
 
     it "cycle discovery should handle a complicated cycle" do
@@ -347,8 +353,8 @@ describe Puppet::SimpleGraph do
       add_edges "c" => "c2", "c2" => "b"
 
       cycles = nil
-      expect { cycles = @graph.find_cycles_in_graph.sort }.should_not raise_error
-      cycles.should be == [%w{a b c c1 c2}]
+      expect { cycles = @graph.find_cycles_in_graph }.to_not raise_error
+      simplify(cycles).should be == [%w{a b c1 c2 c}]
     end
 
     it "cycle discovery should not fail with large data sets" do
@@ -356,16 +362,16 @@ describe Puppet::SimpleGraph do
       (1..(limit - 1)).each do |n| add_edges n.to_s => (n+1).to_s end
 
       cycles = nil
-      expect { cycles = @graph.find_cycles_in_graph.sort }.should_not raise_error
-      cycles.should be == []
+      expect { cycles = @graph.find_cycles_in_graph }.to_not raise_error
+      simplify(cycles).should be == []
     end
 
     it "path finding should work with a simple cycle" do
       add_edges "a" => "b", "b" => "c", "c" => "a"
 
-      cycles = @graph.find_cycles_in_graph.sort
+      cycles = @graph.find_cycles_in_graph
       paths = @graph.paths_in_cycle(cycles.first, 100)
-      paths.should be == [%w{a b c a}]
+      simplify(paths).should be == [%w{a b c a}]
     end
 
     it "path finding should work with two independent cycles" do
@@ -373,28 +379,28 @@ describe Puppet::SimpleGraph do
       add_edges "a" => "b2"
       add_edges "b1" => "a", "b2" => "a"
 
-      cycles = @graph.find_cycles_in_graph.sort
+      cycles = @graph.find_cycles_in_graph
       cycles.length.should be == 1
 
       paths = @graph.paths_in_cycle(cycles.first, 100)
-      paths.sort.should be == [%w{a b1 a}, %w{a b2 a}]
+      simplify(paths).should be == [%w{a b1 a}, %w{a b2 a}]
     end
 
     it "path finding should prefer shorter paths in cycles" do
       add_edges "a" => "b", "b" => "c", "c" => "a"
       add_edges "b" => "a"
 
-      cycles = @graph.find_cycles_in_graph.sort
+      cycles = @graph.find_cycles_in_graph
       cycles.length.should be == 1
 
       paths = @graph.paths_in_cycle(cycles.first, 100)
-      paths.should be == [%w{a b a}, %w{a b c a}]
+      simplify(paths).should be == [%w{a b a}, %w{a b c a}]
     end
 
     it "path finding should respect the max_path value" do
       (1..20).each do |n| add_edges "a" => "b#{n}", "b#{n}" => "a" end
 
-      cycles = @graph.find_cycles_in_graph.sort
+      cycles = @graph.find_cycles_in_graph
       cycles.length.should be == 1
 
       (1..20).each do |n|
@@ -404,17 +410,6 @@ describe Puppet::SimpleGraph do
 
       paths = @graph.paths_in_cycle(cycles.first, 21)
       paths.length.should be == 20
-    end
-
-    # Our graph's add_edge method is smart enough not to add
-    # duplicate edges, so we use the objects, which it doesn't
-    # check.
-    it "should be able to sort graphs with duplicate edges" do
-      one = Puppet::Relationship.new(:a, :b)
-      @graph.add_edge(one)
-      two = Puppet::Relationship.new(:a, :b)
-      @graph.add_edge(two)
-      proc { @graph.topsort }.should_not raise_error
     end
   end
 
@@ -460,8 +455,22 @@ describe Puppet::SimpleGraph do
   describe "when matching edges" do
     before do
       @graph = Puppet::SimpleGraph.new
-      @event = Puppet::Transaction::Event.new(:name => :yay, :resource => "a")
-      @none = Puppet::Transaction::Event.new(:name => :NONE, :resource => "a")
+
+      # The Ruby 1.8 semantics for String#[] are that treating it like an
+      # array and asking for `"a"[:whatever]` returns `nil`.  Ruby 1.9
+      # enforces that your index has to be numeric.
+      #
+      # Now, the real object here, a resource, implements [] and does
+      # something sane, but we don't care about any of the things that get
+      # asked for.  Right now, anyway.
+      #
+      # So, in 1.8 we could just pass a string and it worked.  For 1.9 we can
+      # fake it well enough by stubbing out the operator to return nil no
+      # matter what input we give. --daniel 2012-03-11
+      resource = "a"
+      resource.stubs(:[])
+      @event = Puppet::Transaction::Event.new(:name => :yay, :resource => resource)
+      @none = Puppet::Transaction::Event.new(:name => :NONE, :resource => resource)
 
       @edges = {}
       @edges["a/b"] = Puppet::Relationship.new("a", "b", {:event => :yay, :callback => :refresh})
@@ -521,7 +530,7 @@ describe Puppet::SimpleGraph do
 
   require 'puppet/util/graph'
 
-  class Container
+  class Container < Puppet::Type::Component
     include Puppet::Util::Graph
     include Enumerable
     attr_accessor :name
@@ -541,8 +550,13 @@ describe Puppet::SimpleGraph do
     def to_s
       @name
     end
+
+    def ref
+      "Container[#{self}]"
+    end
   end
 
+  require "puppet/resource/catalog"
   describe "when splicing the graph" do
     def container_graph
       @one = Container.new("one", %w{a b})
@@ -551,15 +565,23 @@ describe Puppet::SimpleGraph do
       @middle = Container.new("middle", ["e", "f", @two])
       @top = Container.new("top", ["g", "h", @middle, @one, @three])
       @empty = Container.new("empty", [])
-      
+
       @whit  = Puppet::Type.type(:whit)
       @stage = Puppet::Type.type(:stage).new(:name => "foo")
 
-      @contgraph = @top.to_graph
+      @contgraph = @top.to_graph(Puppet::Resource::Catalog.new)
 
       # We have to add the container to the main graph, else it won't
       # be spliced in the dependency graph.
       @contgraph.add_vertex(@empty)
+    end
+
+    def containers
+      @contgraph.vertices.select { |x| !x.is_a? String }
+    end
+
+    def contents_of(x)
+      @contgraph.direct_dependents_of(x)
     end
 
     def dependency_graph
@@ -570,13 +592,34 @@ describe Puppet::SimpleGraph do
 
       # We have to specify a relationship to our empty container, else it
       # never makes it into the dep graph in the first place.
-      {@one => @two, "f" => "c", "h" => @middle, "c" => @empty}.each do |source, target|
+      @explicit_dependencies = {@one => @two, "f" => "c", "h" => @middle, "c" => @empty}
+      @explicit_dependencies.each do |source, target|
         @depgraph.add_edge(source, target, :callback => :refresh)
       end
     end
 
     def splice
-      @depgraph.splice!(@contgraph, Container)
+      @contgraph.splice!(@depgraph)
+    end
+
+    def whit_called(name)
+      x = @depgraph.vertices.find { |v| v.is_a?(@whit) && v.name =~ /#{Regexp.escape(name)}/ }
+      x.should_not be_nil
+      def x.to_s
+        "Whit[#{name}]"
+      end
+      def x.inspect
+        to_s
+      end
+      x
+    end
+
+    def admissible_sentinel_of(x)
+      @depgraph.vertex?(x) ? x : whit_called("admissible_#{x.ref}")
+    end
+
+    def completed_sentinel_of(x)
+      @depgraph.vertex?(x) ? x : whit_called("completed_#{x.ref}")
     end
 
     before do
@@ -585,63 +628,87 @@ describe Puppet::SimpleGraph do
       splice
     end
 
-    # This is the real heart of splicing -- replacing all containers in
-    # our relationship and exploding their relationships so that each
-    # relationship to a container gets copied to all of its children.
+    # This is the real heart of splicing -- replacing all containers X in our
+    # relationship graph with a pair of whits { admissible_X and completed_X }
+    # such that that
+    #
+    #    0) completed_X depends on admissible_X
+    #    1) contents of X each depend on admissible_X
+    #    2) completed_X depends on each on the contents of X
+    #    3) everything which depended on X depends on completed_X
+    #    4) admissible_X depends on everything X depended on
+    #    5) the containers and their edges must be removed
+    #
+    # Note that this requires attention to the possible case of containers
+    # which contain or depend on other containers.
+    #
+    # Point by point:
+
+    #    0) completed_X depends on admissible_X
+    #
+    it "every container's completed sentinel should depend on its admissible sentinel" do
+      containers.each { |container|
+        @depgraph.path_between(admissible_sentinel_of(container),completed_sentinel_of(container)).should be
+      }
+    end
+
+    #    1) contents of X each depend on admissible_X
+    #
+    it "all contained objects should depend on their container's admissible sentinel" do
+      containers.each { |container|
+        contents_of(container).each { |leaf|
+          @depgraph.should be_edge(admissible_sentinel_of(container),admissible_sentinel_of(leaf))
+        }
+      }
+    end
+
+    #    2) completed_X depends on each on the contents of X
+    #
+    it "completed sentinels should depend on their container's contents" do
+      containers.each { |container|
+        contents_of(container).each { |leaf|
+          @depgraph.should be_edge(completed_sentinel_of(leaf),completed_sentinel_of(container))
+        }
+      }
+    end
+
+    #
+    #    3) everything which depended on X depends on completed_X
+
+    #
+    #    4) admissible_X depends on everything X depended on
+
+    #    5) the containers and their edges must be removed
+    #
     it "should remove all Container objects from the dependency graph" do
       @depgraph.vertices.find_all { |v| v.is_a?(Container) }.should be_empty
     end
 
-    # This is a bit hideous, but required to make stages work with relationships - they're
-    # the top of the graph.
     it "should remove all Stage resources from the dependency graph" do
       @depgraph.vertices.find_all { |v| v.is_a?(Puppet::Type.type(:stage)) }.should be_empty
-    end
-
-    it "should add container relationships to contained objects" do
-      @contgraph.leaves(@middle).each do |leaf|
-        @depgraph.should be_edge("h", leaf)
-      end
-    end
-
-    it "should explode container-to-container relationships, making edges between all respective contained objects" do
-      @one.each do |oobj|
-        @two.each do |tobj|
-          @depgraph.should be_edge(oobj, tobj)
-        end
-      end
-    end
-
-    it "should contain a whit-resource to mark the place held by the empty container" do
-      @depgraph.vertices.find_all { |v| v.is_a?(@whit) }.length.should == 1
-    end
-
-    it "should replace edges to empty containers with edges to their residual whit" do
-      emptys_whit = @depgraph.vertices.find_all { |v| v.is_a?(@whit) }.first
-      @depgraph.should be_edge("c", emptys_whit)
     end
 
     it "should no longer contain anything but the non-container objects" do
       @depgraph.vertices.find_all { |v| ! v.is_a?(String) and ! v.is_a?(@whit)}.should be_empty
     end
 
-    it "should copy labels" do
-      @depgraph.edges.each do |edge|
-        edge.label.should == {:callback => :refresh}
-      end
+    it "should retain labels on non-containment edges" do
+      @explicit_dependencies.each { |f,t|
+        @depgraph.edges_between(completed_sentinel_of(f),admissible_sentinel_of(t))[0].label.should == {:callback => :refresh}
+      }
     end
 
     it "should not add labels to edges that have none" do
       @depgraph.add_edge(@two, @three)
       splice
-      @depgraph.edges_between("c", "i")[0].label.should == {}
+      @depgraph.path_between("c", "i").any? {|segment| segment.all? {|e| e.label == {} }}.should be
     end
 
     it "should copy labels over edges that have none" do
       @depgraph.add_edge("c", @three, {:callback => :refresh})
       splice
       # And make sure the label got copied.
-      @depgraph.edges_between("c", "i")[0].label.should == {:callback => :refresh}
+      @depgraph.path_between("c", "i").flatten.select {|e| e.label == {:callback => :refresh} }.should_not be_empty
     end
 
     it "should not replace a label with a nil label" do
@@ -649,7 +716,7 @@ describe Puppet::SimpleGraph do
       @depgraph.add_edge(@middle, @three)
       @depgraph.add_edge("c", @three, {:callback => :refresh})
       splice
-      @depgraph.edges_between("c", "i")[0].label.should == {:callback => :refresh}
+      @depgraph.path_between("c","i").flatten.select {|e| e.label == {:callback => :refresh} }.should_not be_empty
     end
 
     it "should copy labels to all created edges" do
@@ -658,8 +725,9 @@ describe Puppet::SimpleGraph do
       splice
       @three.each do |child|
         edge = Puppet::Relationship.new("c", child)
-        @depgraph.should be_edge(edge.source, edge.target)
-        @depgraph.edges_between(edge.source, edge.target)[0].label.should == {:callback => :refresh}
+        (path = @depgraph.path_between(edge.source, edge.target)).should be
+        path.should_not be_empty
+        path.flatten.select {|e| e.label == {:callback => :refresh} }.should_not be_empty
       end
     end
   end
@@ -722,7 +790,7 @@ describe Puppet::SimpleGraph do
     # Test serialization of graph to YAML.
     [:old, :new].each do |which_format|
       all_test_graphs.each do |graph_to_test|
-        it "should be able to serialize #{graph_to_test} to YAML (#{which_format} format)" do
+        it "should be able to serialize #{graph_to_test} to YAML (#{which_format} format)", :if => (RUBY_VERSION[0,3] == '1.8' or YAML::ENGINE.syck?) do
           graph = Puppet::SimpleGraph.new
           send(graph_to_test, graph)
           yaml_form = graph_to_yaml(graph, which_format)

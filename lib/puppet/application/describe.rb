@@ -70,7 +70,7 @@ class TypeDoc
     }.each do |name|
       type = @types[name]
       s = type.doc.gsub(/\s+/, " ")
-      n = s.index(".")
+      n = s.index(". ")
       if n.nil?
         s = ".. no documentation .."
       elsif n > 45
@@ -170,8 +170,6 @@ end
 class Puppet::Application::Describe < Puppet::Application
   banner "puppet describe [options] [type]"
 
-  should_not_parse_config
-
   option("--short", "-s", "Only list parameters without detail") do |arg|
     options[:parameters] = false
   end
@@ -181,7 +179,7 @@ class Puppet::Application::Describe < Puppet::Application
   option("--meta","-m")
 
   def help
-    <<-HELP
+    <<-'HELP'
 
 puppet-describe(8) -- Display help about resource types
 ========
@@ -228,8 +226,7 @@ David Lutterkort
 
 COPYRIGHT
 ---------
-Copyright (c) 2005 Puppet Labs, LLC Licensed under the GNU Public
-License
+Copyright (c) 2011 Puppet Labs, LLC Licensed under the Apache 2.0 License
 
     HELP
   end

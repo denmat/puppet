@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/network/formats'
 
@@ -56,15 +55,15 @@ describe "Puppet Network Format" do
       @yaml.render_multiple(instances).should == "foo"
     end
 
-    it "should intern by calling 'YAML.load'" do
+    it "should safely load YAML when interning" do
       text = "foo"
-      YAML.expects(:load).with("foo").returns "bar"
+      YAML.expects(:safely_load).with("foo").returns "bar"
       @yaml.intern(String, text).should == "bar"
     end
 
-    it "should intern multiples by calling 'YAML.load'" do
+    it "should safely load YAML when interning multiples" do
       text = "foo"
-      YAML.expects(:load).with("foo").returns "bar"
+      YAML.expects(:safely_load).with("foo").returns "bar"
       @yaml.intern_multiple(String, text).should == "bar"
     end
   end
@@ -121,10 +120,10 @@ describe "Puppet Network Format" do
       @yaml.intern_multiple(String, text).should == "bar"
     end
 
-    it "should decode by base64 decoding, uncompressing and Yaml loading" do
+    it "should decode by base64 decoding, uncompressing and safely Yaml loading" do
       Base64.expects(:decode64).with("zorg").returns "foo"
       Zlib::Inflate.expects(:inflate).with("foo").returns "baz"
-      YAML.expects(:load).with("baz").returns "bar"
+      YAML.expects(:safely_load).with("baz").returns "bar"
       @yaml.decode("zorg").should == "bar"
     end
 
@@ -161,49 +160,6 @@ describe "Puppet Network Format" do
       end
     end
 
-  end
-
-  it "should include a marshal format" do
-    Puppet::Network::FormatHandler.format(:marshal).should_not be_nil
-  end
-
-  describe "marshal" do
-    before do
-      @marshal = Puppet::Network::FormatHandler.format(:marshal)
-    end
-
-    it "should have its mime type set to text/marshal" do
-      Puppet::Network::FormatHandler.format(:marshal).mime.should == "text/marshal"
-    end
-
-    it "should be supported on Strings" do
-      @marshal.should be_supported(String)
-    end
-
-    it "should render by calling 'Marshal.dump' on the instance" do
-      instance = mock 'instance'
-      Marshal.expects(:dump).with(instance).returns "foo"
-      @marshal.render(instance).should == "foo"
-    end
-
-    it "should render multiple instances by calling 'to_marshal' on the array" do
-      instances = [mock('instance')]
-
-      Marshal.expects(:dump).with(instances).returns "foo"
-      @marshal.render_multiple(instances).should == "foo"
-    end
-
-    it "should intern by calling 'Marshal.load'" do
-      text = "foo"
-      Marshal.expects(:load).with("foo").returns "bar"
-      @marshal.intern(String, text).should == "bar"
-    end
-
-    it "should intern multiples by calling 'Marshal.load'" do
-      text = "foo"
-      Marshal.expects(:load).with("foo").returns "bar"
-      @marshal.intern_multiple(String, text).should == "bar"
-    end
   end
 
   describe "plaintext" do
@@ -264,7 +220,7 @@ describe "Puppet Network Format" do
     Puppet::Network::FormatHandler.format(:pson).should_not be_nil
   end
 
-  describe "pson", :if => Puppet.features.pson? do
+  describe "pson" do
     before do
       @pson = Puppet::Network::FormatHandler.format(:pson)
     end
@@ -329,6 +285,72 @@ describe "Puppet Network Format" do
         PsonTest.expects(:from_pson).with("baz").returns "BAZ"
         @pson.intern_multiple(PsonTest, text).should == %w{BAR BAZ}
       end
+    end
+  end
+
+  describe ":console format" do
+    subject { Puppet::Network::FormatHandler.format(:console) }
+    it { should be_an_instance_of Puppet::Network::Format }
+    let :json do Puppet::Network::FormatHandler.format(:pson) end
+
+    [:intern, :intern_multiple].each do |method|
+      it "should not implement #{method}" do
+        expect { subject.send(method, String, 'blah') }.to raise_error NotImplementedError
+      end
+    end
+
+    ["hello", 1, 1.0].each do |input|
+      it "should just return a #{input.inspect}" do
+        subject.render(input).should == input
+      end
+    end
+
+    [[1, 2], ["one"], [{ 1 => 1 }]].each do |input|
+      it "should render #{input.inspect} as JSON" do
+        subject.render(input).should == json.render(input).chomp
+      end
+    end
+
+    it "should render empty hashes as empty strings" do
+      subject.render({}).should == ''
+    end
+
+    it "should render a non-trivially-keyed Hash as JSON" do
+      hash = { [1,2] => 3, [2,3] => 5, [3,4] => 7 }
+      subject.render(hash).should == json.render(hash).chomp
+    end
+
+    it "should render a {String,Numeric}-keyed Hash into a table" do
+      object = Object.new
+      hash = { "one" => 1, "two" => [], "three" => {}, "four" => object,
+        5 => 5, 6.0 => 6 }
+
+      # Gotta love ASCII-betical sort order.  Hope your objects are better
+      # structured for display than my test one is. --daniel 2011-04-18
+      subject.render(hash).should == <<EOT
+5      5
+6.0    6
+four   #{json.render(object).chomp}
+one    1
+three  {}
+two    []
+EOT
+    end
+
+    it "should render a hash nicely with a multi-line value" do
+      pending "Moving to PSON rather than PP makes this unsupportable."
+      hash = {
+        "number" => { "1" => '1' * 40, "2" => '2' * 40, '3' => '3' * 40 },
+        "text"   => { "a" => 'a' * 40, 'b' => 'b' * 40, 'c' => 'c' * 40 }
+      }
+      subject.render(hash).should == <<EOT
+number  {"1"=>"1111111111111111111111111111111111111111",
+         "2"=>"2222222222222222222222222222222222222222",
+         "3"=>"3333333333333333333333333333333333333333"}
+text    {"a"=>"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+         "b"=>"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+         "c"=>"cccccccccccccccccccccccccccccccccccccccc"}
+EOT
     end
   end
 end

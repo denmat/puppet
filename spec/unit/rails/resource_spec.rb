@@ -1,18 +1,11 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 require 'puppet/rails'
 
-describe "Puppet::Rails::Resource", :if => Puppet.features.rails? do
-  def column(name, type)
-    ActiveRecord::ConnectionAdapters::Column.new(name, nil, type, false)
-  end
-
+describe "Puppet::Rails::Resource", :if => can_use_scratch_database? do
   before do
     require 'puppet/rails/resource'
-
-    # Stub this so we don't need access to the DB.
-    Puppet::Rails::Resource.stubs(:columns).returns([column("title", "string"), column("restype", "string"), column("exported", "boolean")])
+    setup_scratch_database
   end
 
   describe "when creating initial resource arguments" do

@@ -1,15 +1,17 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/parser/type_loader'
+require 'puppet_spec/modules'
 require 'puppet_spec/files'
 
 describe Puppet::Parser::TypeLoader do
+  include PuppetSpec::Modules
   include PuppetSpec::Files
 
   before do
     @loader = Puppet::Parser::TypeLoader.new(:myenv)
+    Puppet.expects(:deprecation_warning).never
   end
 
   it "should support an environment" do
@@ -57,8 +59,8 @@ describe Puppet::Parser::TypeLoader do
     end
 
     it "should use the directory of the current file if one is set" do
-      Puppet::Parser::Files.expects(:find_manifests).with { |pat, opts| opts[:cwd] == "/current" }.returns ["modname", %w{one}]
-      @loader.import("myfile", "/current/file")
+      Puppet::Parser::Files.expects(:find_manifests).with { |pat, opts| opts[:cwd] == make_absolute("/current") }.returns ["modname", %w{one}]
+      @loader.import("myfile", make_absolute("/current/file"))
     end
 
     it "should pass the environment when looking for files" do
@@ -72,15 +74,15 @@ describe Puppet::Parser::TypeLoader do
     end
 
     it "should parse each found file" do
-      Puppet::Parser::Files.expects(:find_manifests).returns ["modname", %w{/one}]
-      @loader.expects(:parse_file).with("/one").returns(Puppet::Parser::AST::Hostclass.new(''))
+      Puppet::Parser::Files.expects(:find_manifests).returns ["modname", [make_absolute("/one")]]
+      @loader.expects(:parse_file).with(make_absolute("/one")).returns(Puppet::Parser::AST::Hostclass.new(''))
       @loader.import("myfile")
     end
 
     it "should make each file qualified before attempting to parse it" do
       Puppet::Parser::Files.expects(:find_manifests).returns ["modname", %w{one}]
-      @loader.expects(:parse_file).with("/current/one").returns(Puppet::Parser::AST::Hostclass.new(''))
-      @loader.import("myfile", "/current/file")
+      @loader.expects(:parse_file).with(make_absolute("/current/one")).returns(Puppet::Parser::AST::Hostclass.new(''))
+      @loader.import("myfile", make_absolute("/current/file"))
     end
 
     it "should not attempt to import files that have already been imported" do
@@ -90,6 +92,100 @@ describe Puppet::Parser::TypeLoader do
 
       # This will fail if it tries to reimport the file.
       @loader.import("myfile")
+    end
+  end
+
+  describe "when importing all" do
+    before do
+      @base = tmpdir("base")
+
+      # Create two module path directories
+      @modulebase1 = File.join(@base, "first")
+      FileUtils.mkdir_p(@modulebase1)
+      @modulebase2 = File.join(@base, "second")
+      FileUtils.mkdir_p(@modulebase2)
+
+      Puppet[:modulepath] = "#{@modulebase1}#{File::PATH_SEPARATOR}#{@modulebase2}"
+    end
+
+    def mk_module(basedir, name)
+      PuppetSpec::Modules.create(name, basedir)
+    end
+
+    # We have to pass the base path so that we can
+    # write to modules that are in the second search path
+    def mk_manifests(base, mod, type, files)
+      exts = {"ruby" => ".rb", "puppet" => ".pp"}
+      files.collect do |file|
+        name = mod.name + "::" + file.gsub("/", "::")
+        path = File.join(base, mod.name, "manifests", file + exts[type])
+        FileUtils.mkdir_p(File.split(path)[0])
+
+        # write out the class
+        if type == "ruby"
+          File.open(path, "w") { |f| f.print "hostclass '#{name}' do\nend" }
+        else
+          File.open(path, "w") { |f| f.print "class #{name} {}" }
+        end
+        name
+      end
+    end
+
+    it "should load all puppet manifests from all modules in the specified environment" do
+      @module1 = mk_module(@modulebase1, "one")
+      @module2 = mk_module(@modulebase2, "two")
+
+      mk_manifests(@modulebase1, @module1, "puppet", %w{a b})
+      mk_manifests(@modulebase2, @module2, "puppet", %w{c d})
+
+      @loader.import_all
+
+      @loader.environment.known_resource_types.hostclass("one::a").should be_instance_of(Puppet::Resource::Type)
+      @loader.environment.known_resource_types.hostclass("one::b").should be_instance_of(Puppet::Resource::Type)
+      @loader.environment.known_resource_types.hostclass("two::c").should be_instance_of(Puppet::Resource::Type)
+      @loader.environment.known_resource_types.hostclass("two::d").should be_instance_of(Puppet::Resource::Type)
+    end
+
+    it "should load all ruby manifests from all modules in the specified environment" do
+      Puppet.expects(:deprecation_warning).at_least(1)
+
+      @module1 = mk_module(@modulebase1, "one")
+      @module2 = mk_module(@modulebase2, "two")
+
+      mk_manifests(@modulebase1, @module1, "ruby", %w{a b})
+      mk_manifests(@modulebase2, @module2, "ruby", %w{c d})
+
+      @loader.import_all
+
+      @loader.environment.known_resource_types.hostclass("one::a").should be_instance_of(Puppet::Resource::Type)
+      @loader.environment.known_resource_types.hostclass("one::b").should be_instance_of(Puppet::Resource::Type)
+      @loader.environment.known_resource_types.hostclass("two::c").should be_instance_of(Puppet::Resource::Type)
+      @loader.environment.known_resource_types.hostclass("two::d").should be_instance_of(Puppet::Resource::Type)
+    end
+
+    it "should not load manifests from duplicate modules later in the module path" do
+      @module1 = mk_module(@modulebase1, "one")
+
+      # duplicate
+      @module2 = mk_module(@modulebase2, "one")
+
+      mk_manifests(@modulebase1, @module1, "puppet", %w{a})
+      mk_manifests(@modulebase2, @module2, "puppet", %w{c})
+
+      @loader.import_all
+
+      @loader.environment.known_resource_types.hostclass("one::c").should be_nil
+    end
+
+    it "should load manifests from subdirectories" do
+      @module1 = mk_module(@modulebase1, "one")
+
+      mk_manifests(@modulebase1, @module1, "puppet", %w{a a/b a/b/c})
+
+      @loader.import_all
+
+      @loader.environment.known_resource_types.hostclass("one::a::b").should be_instance_of(Puppet::Resource::Type)
+      @loader.environment.known_resource_types.hostclass("one::a::b::c").should be_instance_of(Puppet::Resource::Type)
     end
   end
 

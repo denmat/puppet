@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe Puppet::Parser::Parser do
   module ParseMatcher
@@ -117,6 +116,35 @@ describe Puppet::Parser::Parser do
         $hash = { 'a' => { 'b' => { 'c' => 'it works' } } }
         $out = $hash['a']['b']['c']
       }.should parse_with { |v| v.value.is_a?(Puppet::Parser::AST::ASTHash) }
+    end
+
+    it "should fail if asked to parse '$foo::::bar'" do
+      expect { @parser.parse("$foo::::bar") }.to raise_error(Puppet::ParseError, /Syntax error at ':'/)
+    end
+
+    describe "function calls" do
+      it "should be able to pass an array to a function" do
+        "my_function([1,2,3])".should parse_with { |fun|
+          fun.is_a?(Puppet::Parser::AST::Function) &&
+          fun.arguments[0].evaluate(stub 'scope') == ['1','2','3']
+        }
+      end
+
+      it "should be able to pass a hash to a function" do
+        "my_function({foo => bar})".should parse_with { |fun|
+          fun.is_a?(Puppet::Parser::AST::Function) &&
+          fun.arguments[0].evaluate(stub 'scope') == {'foo' => 'bar'}
+        }
+      end
+    end
+
+    describe "collections" do
+      it "should find resources according to an expression" do
+        %q{ File <| mode == 0700 + 0050 + 0050 |> }.should parse_with { |coll|
+          coll.is_a?(Puppet::Parser::AST::Collection) &&
+            coll.query.evaluate(stub 'scope').first == ["mode", "==", 0700 + 0050 + 0050]
+        }
+      end
     end
   end
 end

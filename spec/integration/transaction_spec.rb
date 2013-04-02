@@ -1,10 +1,7 @@
-#!/usr/bin/env ruby
+#! /usr/bin/env ruby
+require 'spec_helper'
 
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
-
-require 'puppet_spec/files'
 require 'puppet/transaction'
-require 'puppet_spec/files'
 
 describe Puppet::Transaction do
   include PuppetSpec::Files
@@ -19,12 +16,20 @@ describe Puppet::Transaction do
     catalog
   end
 
+  def usr_bin_touch(path)
+    Puppet.features.microsoft_windows? ? "#{ENV['windir']}/system32/cmd.exe /c \"type NUL >> \"#{path}\"\"" : "/usr/bin/touch #{path}"
+  end
+
+  def touch(path)
+    Puppet.features.microsoft_windows? ? "cmd.exe /c \"type NUL >> \"#{path}\"\"" : "touch #{path}"
+  end
+
   it "should not apply generated resources if the parent resource fails" do
     catalog = Puppet::Resource::Catalog.new
-    resource = Puppet::Type.type(:file).new :path => "/foo/bar", :backup => false
+    resource = Puppet::Type.type(:file).new :path => make_absolute("/foo/bar"), :backup => false
     catalog.add_resource resource
 
-    child_resource = Puppet::Type.type(:file).new :path => "/foo/bar/baz", :backup => false
+    child_resource = Puppet::Type.type(:file).new :path => make_absolute("/foo/bar/baz"), :backup => false
 
     resource.expects(:eval_generate).returns([child_resource])
 
@@ -40,7 +45,7 @@ describe Puppet::Transaction do
 
   it "should not apply virtual resources" do
     catalog = Puppet::Resource::Catalog.new
-    resource = Puppet::Type.type(:file).new :path => "/foo/bar", :backup => false
+    resource = Puppet::Type.type(:file).new :path => make_absolute("/foo/bar"), :backup => false
     resource.virtual = true
     catalog.add_resource resource
 
@@ -64,7 +69,7 @@ describe Puppet::Transaction do
 
   it "should not apply virtual exported resources" do
     catalog = Puppet::Resource::Catalog.new
-    resource = Puppet::Type.type(:file).new :path => "/foo/bar", :backup => false
+    resource = Puppet::Type.type(:file).new :path => make_absolute("/foo/bar"), :backup => false
     resource.exported = true
     resource.virtual = true
     catalog.add_resource resource
@@ -76,13 +81,69 @@ describe Puppet::Transaction do
     transaction.evaluate
   end
 
+  it "should not apply device resources on normal host" do
+    catalog = Puppet::Resource::Catalog.new
+    resource = Puppet::Type.type(:interface).new :name => "FastEthernet 0/1"
+    catalog.add_resource resource
+
+    transaction = Puppet::Transaction.new(catalog)
+    transaction.for_network_device = false
+
+    transaction.expects(:apply).never.with(resource, nil)
+
+    transaction.evaluate
+    transaction.resource_status(resource).should be_skipped
+  end
+
+  it "should not apply host resources on device" do
+    catalog = Puppet::Resource::Catalog.new
+    resource = Puppet::Type.type(:file).new :path => make_absolute("/foo/bar"), :backup => false
+    catalog.add_resource resource
+
+    transaction = Puppet::Transaction.new(catalog)
+    transaction.for_network_device = true
+
+    transaction.expects(:apply).never.with(resource, nil)
+
+    transaction.evaluate
+    transaction.resource_status(resource).should be_skipped
+  end
+
+  it "should apply device resources on device" do
+    catalog = Puppet::Resource::Catalog.new
+    resource = Puppet::Type.type(:interface).new :name => "FastEthernet 0/1"
+    catalog.add_resource resource
+
+    transaction = Puppet::Transaction.new(catalog)
+    transaction.for_network_device = true
+
+    transaction.expects(:apply).with(resource, nil)
+
+    transaction.evaluate
+    transaction.resource_status(resource).should_not be_skipped
+  end
+
+  it "should apply resources appliable on host and device on a device" do
+    catalog = Puppet::Resource::Catalog.new
+    resource = Puppet::Type.type(:schedule).new :name => "test"
+    catalog.add_resource resource
+
+    transaction = Puppet::Transaction.new(catalog)
+    transaction.for_network_device = true
+
+    transaction.expects(:apply).with(resource, nil)
+
+    transaction.evaluate
+    transaction.resource_status(resource).should_not be_skipped
+  end
+
   # Verify that one component requiring another causes the contained
   # resources in the requiring component to get refreshed.
   it "should propagate events from a contained resource through its container to its dependent container's contained resources" do
     transaction = nil
     file = Puppet::Type.type(:file).new :path => tmpfile("event_propagation"), :ensure => :present
     execfile = File.join(tmpdir("exec_event"), "exectestingness2")
-    exec = Puppet::Type.type(:exec).new :command => "touch #{execfile}", :path => ENV['PATH']
+    exec = Puppet::Type.type(:exec).new :command => touch(execfile), :path => ENV['PATH']
     catalog = mk_catalog(file)
 
     fcomp = Puppet::Type.type(:component).new(:name => "Foo[file]")
@@ -114,14 +175,14 @@ describe Puppet::Transaction do
 
     exec1 = Puppet::Type.type(:exec).new(
       :path    => ENV["PATH"],
-      :command => "touch #{file1}",
+      :command => touch(file1),
       :refreshonly => true,
       :subscribe   => Puppet::Resource.new(:file, path)
     )
 
     exec2 = Puppet::Type.type(:exec).new(
       :path        => ENV["PATH"],
-      :command     => "touch #{file2}",
+      :command     => touch(file2),
       :refreshonly => true,
       :subscribe   => Puppet::Resource.new(:file, path)
     )
@@ -135,33 +196,26 @@ describe Puppet::Transaction do
   it "should not let one failed refresh result in other refreshes failing" do
     path = tmpfile("path")
     newfile = tmpfile("file")
-
-          file = Puppet::Type.type(:file).new(
-                
+      file = Puppet::Type.type(:file).new(
       :path => path,
-        
       :ensure => "file"
     )
 
-          exec1 = Puppet::Type.type(:exec).new(
-                
+    exec1 = Puppet::Type.type(:exec).new(
       :path => ENV["PATH"],
-      :command => "touch /this/cannot/possibly/exist",
+      :command => touch(File.expand_path("/this/cannot/possibly/exist")),
       :logoutput => true,
       :refreshonly => true,
       :subscribe => file,
-        
       :title => "one"
     )
 
-          exec2 = Puppet::Type.type(:exec).new(
-                
+    exec2 = Puppet::Type.type(:exec).new(
       :path => ENV["PATH"],
-      :command => "touch #{newfile}",
+      :command => touch(newfile),
       :logoutput => true,
       :refreshonly => true,
       :subscribe => [file, exec1],
-        
       :title => "two"
     )
 
@@ -178,22 +232,18 @@ describe Puppet::Transaction do
 
     Puppet[:ignoreschedules] = false
 
-          file = Puppet::Type.type(:file).new(
-                
+    file = Puppet::Type.type(:file).new(
       :name => tmpfile("file"),
-        
       :ensure => "file",
       :backup => false
     )
 
     fname = tmpfile("exec")
 
-          exec = Puppet::Type.type(:exec).new(
-                
-      :name => "touch #{fname}",
-      :path => "/usr/bin:/bin",
+    exec = Puppet::Type.type(:exec).new(
+      :name => touch(fname),
+      :path => Puppet.features.microsoft_windows? ? "#{ENV['windir']}/system32" : "/usr/bin:/bin",
       :schedule => "monthly",
-        
       :subscribe => Puppet::Resource.new("file", file.name)
     )
 
@@ -230,29 +280,21 @@ describe Puppet::Transaction do
 
   it "should not attempt to evaluate resources with failed dependencies" do
 
-          exec = Puppet::Type.type(:exec).new(
-                
-      :command => "/bin/mkdir /this/path/cannot/possibly/exit",
-        
+    exec = Puppet::Type.type(:exec).new(
+      :command => "#{File.expand_path('/bin/mkdir')} /this/path/cannot/possibly/exist",
       :title => "mkdir"
     )
 
-
-          file1 = Puppet::Type.type(:file).new(
-                
+    file1 = Puppet::Type.type(:file).new(
       :title => "file1",
       :path => tmpfile("file1"),
-        
       :require => exec,
       :ensure => :file
     )
 
-
-          file2 = Puppet::Type.type(:file).new(
-                
+    file2 = Puppet::Type.type(:file).new(
       :title => "file2",
       :path => tmpfile("file2"),
-        
       :require => file1,
       :ensure => :file
     )
@@ -262,6 +304,32 @@ describe Puppet::Transaction do
 
     FileTest.should_not be_exists(file1[:path])
     FileTest.should_not be_exists(file2[:path])
+  end
+
+  it "should not trigger subscribing resources on failure" do
+    file1 = tmpfile("file1")
+    file2 = tmpfile("file2")
+
+    create_file1 = Puppet::Type.type(:exec).new(
+      :command => usr_bin_touch(file1)
+    )
+
+    exec = Puppet::Type.type(:exec).new(
+      :command => "#{File.expand_path('/bin/mkdir')} /this/path/cannot/possibly/exist",
+      :title => "mkdir",
+      :notify => create_file1
+    )
+
+    create_file2 = Puppet::Type.type(:exec).new(
+      :command => usr_bin_touch(file2),
+      :subscribe => exec
+    )
+
+    catalog = mk_catalog(exec, create_file1, create_file2)
+    catalog.apply
+
+    FileTest.should_not be_exists(file1)
+    FileTest.should_not be_exists(file2)
   end
 
   # #801 -- resources only checked in noop should be rescheduled immediately.

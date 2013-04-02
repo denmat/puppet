@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/indirector/run/local'
 
@@ -13,7 +12,7 @@ describe Puppet::Run::Local do
     runner  = Puppet::Run.new
     runner.stubs(:run).returns(runner)
 
-    request = Puppet::Indirector::Request.new(:indirection, :save, "anything")
+    request = Puppet::Indirector::Request.new(:indirection, :save, "anything", nil)
     request.instance = runner = Puppet::Run.new
     Puppet::Run::Local.new.save(request).should == runner
   end

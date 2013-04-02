@@ -1,8 +1,11 @@
 require 'puppet/provider/parsedfile'
 
 hosts = nil
-case Facter.value(:operatingsystem)
+case Facter.value(:osfamily)
 when "Solaris"; hosts = "/etc/inet/hosts"
+when "windows"
+  require 'win32/resolv'
+  hosts = Win32::Resolv.get_hosts_path
 else
   hosts = "/etc/hosts"
 end

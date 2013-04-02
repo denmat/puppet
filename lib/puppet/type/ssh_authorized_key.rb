@@ -2,8 +2,8 @@ module Puppet
   newtype(:ssh_authorized_key) do
     @doc = "Manages SSH authorized keys. Currently only type 2 keys are
     supported.
-    
-    **Autorequires:** If Puppet is managing the user account in which this 
+
+    **Autorequires:** If Puppet is managing the user account in which this
     SSH key should be installed, the `ssh_authorized_key` resource will autorequire
     that user."
 
@@ -14,20 +14,26 @@ module Puppet
       system-wide primary key and therefore has to be unique."
 
       isnamevar
+
     end
 
     newproperty(:type) do
       desc "The encryption type used: ssh-dss or ssh-rsa."
 
-      newvalue("ssh-dss")
-      newvalue("ssh-rsa")
+      newvalues :'ssh-dss', :'ssh-rsa', :'ecdsa-sha2-nistp256', :'ecdsa-sha2-nistp384', :'ecdsa-sha2-nistp521'
 
-      aliasvalue(:dsa, "ssh-dss")
-      aliasvalue(:rsa, "ssh-rsa")
+      aliasvalue(:dsa, :'ssh-dss')
+      aliasvalue(:rsa, :'ssh-rsa')
     end
 
     newproperty(:key) do
-      desc "The key itself; generally a long string of hex digits."
+      desc "The public key itself; generally a long string of hex characters. The key attribute
+      may not contain whitespace: Omit key headers (e.g. 'ssh-rsa') and key identifiers
+      (e.g. 'joe@joescomputer.local') found in the public key file."
+
+      validate do |value|
+        raise Puppet::Error, "Key must not contain whitespace: #{value}" if value =~ /\s/
+      end
     end
 
     newproperty(:user) do
@@ -80,6 +86,12 @@ module Puppet
           super
         else
           value.join(",")
+        end
+      end
+
+      validate do |value|
+        unless value == :absent or value =~ /^[-a-z0-9A-Z_]+(?:=\".*?\")?$/
+          raise Puppet::Error, "Option #{value} is not valid. A single option must either be of the form 'option' or 'option=\"value\". Multiple options must be provided as an array"
         end
       end
     end

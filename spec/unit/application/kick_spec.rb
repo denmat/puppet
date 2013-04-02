@@ -1,28 +1,25 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/application/kick'
+require 'puppet/run'
+require 'puppet/util/ldap/connection'
 
 describe Puppet::Application::Kick, :if => Puppet.features.posix? do
-
   before :each do
-    require 'puppet/util/ldap/connection'
     Puppet::Util::Ldap::Connection.stubs(:new).returns(stub_everything)
     @kick = Puppet::Application[:kick]
     Puppet::Util::Log.stubs(:newdestination)
-    Puppet::Util::Log.stubs(:level=)
   end
 
   describe ".new" do
     it "should take a command-line object as an argument" do
-      command_line = stub_everything "command_line"
-      lambda{ Puppet::Application::Kick.new( command_line ) }.should_not raise_error
-    end
-  end
+      command_line = Puppet::Util::CommandLine.new("puppet", ['kick', 'myhost'])
+      app = Puppet::Application::Kick.new(command_line)
 
-  it "should ask Puppet::Application to not parse Puppet configuration file" do
-    @kick.should_parse_config?.should be_false
+      app.command_line.subcommand_name.should == "kick"
+      app.command_line.args.should == ['myhost']
+    end
   end
 
   it "should declare a main command" do
@@ -85,7 +82,7 @@ describe Puppet::Application::Kick, :if => Puppet.features.posix? do
       @kick.preinit
     end
 
-    [:all, :foreground, :debug, :ping, :test].each do |option|
+    [:all, :foreground, :debug, :ping, :test, :ignoreschedules].each do |option|
       it "should declare handle_#{option} method" do
         @kick.should respond_to("handle_#{option}".to_sym)
       end
@@ -121,39 +118,38 @@ describe Puppet::Application::Kick, :if => Puppet.features.posix? do
       @kick.classes = []
       @kick.tags = []
       @kick.hosts = []
-      Puppet::Log.stubs(:level=)
       @kick.stubs(:trap)
       @kick.stubs(:puts)
-      Puppet.stubs(:parse_config)
 
       @kick.options.stubs(:[]).with(any_parameters)
     end
 
+    it "should issue a warning that kick is deprecated" do
+      Puppet.expects(:warning).with() { |msg| msg =~ /kick is deprecated/ }
+      @kick.setup
+    end
+
+    it "should abort stating that kick is not supported on Windows" do
+      Puppet.features.stubs(:microsoft_windows?).returns(true)
+
+      expect { @kick.setup }.to raise_error(Puppet::Error, /Puppet kick is not supported on Microsoft Windows/)
+    end
+
     it "should set log level to debug if --debug was passed" do
       @kick.options.stubs(:[]).with(:debug).returns(true)
-
-      Puppet::Log.expects(:level=).with(:debug)
-
       @kick.setup
+      Puppet::Log.level.should == :debug
     end
 
     it "should set log level to info if --verbose was passed" do
       @kick.options.stubs(:[]).with(:verbose).returns(true)
-
-      Puppet::Log.expects(:level=).with(:info)
-
       @kick.setup
-    end
-
-    it "should Parse puppet config" do
-      Puppet.expects(:parse_config)
-
-      @kick.setup
+      Puppet::Log.level.should == :info
     end
 
     describe "when using the ldap node terminus" do
       before :each do
-        Puppet.stubs(:[]).with(:node_terminus).returns("ldap")
+        Puppet[:node_terminus] = "ldap"
       end
 
       it "should pass the fqdn option to search" do
@@ -191,9 +187,7 @@ describe Puppet::Application::Kick, :if => Puppet.features.posix? do
         $stderr.stubs(:puts)
         @kick.classes = ['class']
 
-        @kick.expects(:exit).with(24)
-
-        @kick.setup
+        expect { @kick.setup }.to exit_with 24
       end
     end
   end
@@ -219,9 +213,7 @@ describe Puppet::Application::Kick, :if => Puppet.features.posix? do
 
     describe "the test command" do
       it "should exit with exit code 0 " do
-        @kick.expects(:exit).with(0)
-
-        @kick.test
+        expect { @kick.test }.to exit_with 0
       end
     end
 
@@ -232,8 +224,10 @@ describe Puppet::Application::Kick, :if => Puppet.features.posix? do
         @kick.options.stubs(:[]).with(:ignoreschedules).returns(false)
         @kick.options.stubs(:[]).with(:foreground).returns(false)
         @kick.options.stubs(:[]).with(:debug).returns(false)
+        @kick.options.stubs(:[]).with(:verbose).returns(false) # needed when logging is initialized
+        @kick.options.stubs(:[]).with(:setdest).returns(false) # needed when logging is initialized
+
         @kick.stubs(:print)
-        @kick.stubs(:exit)
         @kick.preinit
         @kick.stubs(:parse_options)
         @kick.setup
@@ -243,18 +237,16 @@ describe Puppet::Application::Kick, :if => Puppet.features.posix? do
       it "should create as much childs as --parallel" do
         @kick.options.stubs(:[]).with(:parallel).returns(3)
         @kick.hosts = ['host1', 'host2', 'host3']
-        @kick.stubs(:exit).raises(SystemExit)
         Process.stubs(:wait).returns(1).then.returns(2).then.returns(3).then.raises(Errno::ECHILD)
 
-        @kick.expects(:fork).times(3).returns(1).then.returns(2).then.returns(3)
+        @kick.expects(:safe_posix_fork).times(3).returns(1).then.returns(2).then.returns(3)
 
-        lambda { @kick.main }.should raise_error
+        expect { @kick.main }.to raise_error SystemExit
       end
 
       it "should delegate to run_for_host per host" do
         @kick.hosts = ['host1', 'host2']
-        @kick.stubs(:exit).raises(SystemExit)
-        @kick.stubs(:fork).returns(1).yields
+        @kick.stubs(:safe_posix_fork).returns(1).yields
         Process.stubs(:wait).returns(1).then.raises(Errno::ECHILD)
 
         @kick.expects(:run_for_host).times(2)
@@ -264,7 +256,6 @@ describe Puppet::Application::Kick, :if => Puppet.features.posix? do
 
       describe "during call of run_for_host" do
         before do
-          require 'puppet/run'
           options = {
             :background => true, :ignoreschedules => false, :tags => []
           }
@@ -272,38 +263,32 @@ describe Puppet::Application::Kick, :if => Puppet.features.posix? do
           @agent_run = Puppet::Run.new( options.dup )
           @agent_run.stubs(:status).returns("success")
 
+          # ensure that we don't actually run the agent
+          @agent_run.stubs(:run).returns(@agent_run)
+
+          Puppet::Run.indirection.terminus_class = :local
           Puppet::Run.indirection.expects(:terminus_class=).with( :rest )
           Puppet::Run.expects(:new).with( options ).returns(@agent_run)
         end
 
         it "should call run on a Puppet::Run for the given host" do
           Puppet::Run.indirection.expects(:save).with(@agent_run, 'https://host:8139/production/run/host').returns(@agent_run)
-
-          @kick.run_for_host('host')
+          expect { @kick.run_for_host('host') }.to exit_with 0
         end
 
         it "should exit the child with 0 on success" do
           @agent_run.stubs(:status).returns("success")
-
-          @kick.expects(:exit).with(0)
-
-          @kick.run_for_host('host')
+          expect { @kick.run_for_host('host') }.to exit_with 0
         end
 
         it "should exit the child with 3 on running" do
           @agent_run.stubs(:status).returns("running")
-
-          @kick.expects(:exit).with(3)
-
-          @kick.run_for_host('host')
+          expect { @kick.run_for_host('host') }.to exit_with 3
         end
 
         it "should exit the child with 12 on unknown answer" do
           @agent_run.stubs(:status).returns("whatever")
-
-          @kick.expects(:exit).with(12)
-
-          @kick.run_for_host('host')
+          expect { @kick.run_for_host('host') }.to exit_with 12
         end
       end
     end

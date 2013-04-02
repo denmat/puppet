@@ -11,15 +11,20 @@ module Puppet
       it can be specified as the value of *backup* in a **file** object.
 
       Currently, filebuckets are only useful for manual retrieval of
-      accidentally removed files (e.g., you look in the log for the md5 sum and retrieve the file with that sum from the filebucket), but
-      when transactions are fully supported filebuckets will be used to
-      undo transactions.
+      accidentally removed files (e.g., you look in the log for the md5 sum
+      and retrieve the file with that sum from the filebucket), but when
+      transactions are fully supported filebuckets will be used to undo
+      transactions.
 
       You will normally want to define a single filebucket for your
       whole network and then use that as the default backup location:
 
           # Define the bucket
-          filebucket { main: server => puppet }
+          filebucket { 'main':
+            server => puppet,
+            path   => false,
+            # Due to a known issue, path must be set to false for remote filebuckets.
+          }
 
           # Specify it as the default target
           File { backup => main }
@@ -36,7 +41,10 @@ module Puppet
       desc "The server providing the remote filebucket.  If this is not
         specified then *path* is checked. If it is set, then the
         bucket is local.  Otherwise the puppetmaster server specified
-        in the config or at the commandline is used."
+        in the config or at the commandline is used.
+
+        Due to a known issue, you currently must set the `path` attribute to
+        false if you wish to specify a `server` attribute."
       defaultto { Puppet[:server] }
     end
 
@@ -53,6 +61,18 @@ module Puppet
         can be specified to set the remote server."
 
       defaultto { Puppet[:clientbucketdir] }
+
+      validate do |value|
+        if value.is_a? Array
+          raise ArgumentError, "You can only have one filebucket path"
+        end
+
+        if value.is_a? String and not Puppet::Util.absolute_path?(value)
+          raise ArgumentError, "Filebucket paths must be absolute"
+        end
+
+        true
+      end
     end
 
     # Create a default filebucket.
@@ -84,8 +104,9 @@ module Puppet
       begin
         @bucket = Puppet::FileBucket::Dipper.new(args)
       rescue => detail
-        puts detail.backtrace if Puppet[:trace]
-        self.fail("Could not create #{type} filebucket: #{detail}")
+        message = "Could not create #{type} filebucket: #{detail}"
+        self.log_exception(detail, message)
+        self.fail(message)
       end
 
       @bucket.name = self.name

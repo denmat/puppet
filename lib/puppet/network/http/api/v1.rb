@@ -8,6 +8,9 @@ module Puppet::Network::HTTP::API::V1
       :plural => :search,
       :singular => :find
     },
+    "POST" => {
+      :singular => :find,
+    },
     "PUT" => {
       :singular => :save
     },
@@ -27,7 +30,8 @@ module Puppet::Network::HTTP::API::V1
 
     method = indirection_method(http_method, indirection)
 
-    params[:environment] = environment
+    params[:environment] = Puppet::Node::Environment.new(environment)
+    params.delete(:bucket_path)
 
     raise ArgumentError, "No request key specified in #{uri}" if key == "" or key.nil?
 
@@ -41,11 +45,16 @@ module Puppet::Network::HTTP::API::V1
     "/#{request.environment.to_s}/#{indirection}/#{request.escaped_key}#{request.query_string}"
   end
 
+  def request_to_uri_and_body(request)
+    indirection = request.method == :search ? pluralize(request.indirection_name.to_s) : request.indirection_name.to_s
+    ["/#{request.environment.to_s}/#{indirection}/#{request.escaped_key}", request.query_string.sub(/^\?/,'')]
+  end
+
   def indirection_method(http_method, indirection)
     raise ArgumentError, "No support for http method #{http_method}" unless METHOD_MAP[http_method]
 
     unless method = METHOD_MAP[http_method][plurality(indirection)]
-      raise ArgumentError, "No support for plural #{http_method} operations"
+      raise ArgumentError, "No support for plurality #{plurality(indirection)} for #{http_method} operations"
     end
 
     method
@@ -61,11 +70,13 @@ module Puppet::Network::HTTP::API::V1
     # that leads to the fix being too long.
     return :singular if indirection == "facts"
     return :singular if indirection == "status"
+    return :singular if indirection == "certificate_status"
     return :plural if indirection == "inventory"
 
     result = (indirection =~ /s$|_search$/) ? :plural : :singular
 
-    indirection.sub!(/s$|_search$|es$/, '')
+    indirection.sub!(/s$|_search$/, '')
+    indirection.sub!(/statuse$/, 'status')
 
     result
   end

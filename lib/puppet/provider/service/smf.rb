@@ -1,19 +1,20 @@
 # Solaris 10 SMF-style services.
 Puppet::Type.type(:service).provide :smf, :parent => :base do
-  desc "Support for Sun's new Service Management Framework.
+  desc <<-EOT
+    Support for Sun's new Service Management Framework.
 
-  Starting a service is effectively equivalent to enabling it, so there is
-  only support for starting and stopping services, which also enables and
-  disables them, respectively.
+    Starting a service is effectively equivalent to enabling it, so there is
+    only support for starting and stopping services, which also enables and
+    disables them, respectively.
 
-  By specifying manifest => \"/path/to/service.xml\", the SMF manifest will
-  be imported if it does not exist.
+    By specifying `manifest => "/path/to/service.xml"`, the SMF manifest will
+    be imported if it does not exist.
 
-  "
+  EOT
 
-  defaultfor :operatingsystem => :solaris
+  defaultfor :osfamily => :solaris
 
-  confine :operatingsystem => :solaris
+  confine :osfamily => :solaris
 
   commands :adm => "/usr/sbin/svcadm", :svcs => "/usr/bin/svcs"
   commands :svccfg => "/usr/sbin/svccfg"
@@ -27,7 +28,19 @@ Puppet::Type.type(:service).provide :smf, :parent => :base do
         end
       end
   rescue Puppet::ExecutionFailure => detail
-      raise Puppet::Error.new( "Cannot config #{self.service} to enable it: #{detail}" )
+      raise Puppet::Error.new( "Cannot config #{self.name} to enable it: #{detail}" )
+  end
+
+  def self.instances
+   svcs.split("\n").select{|l| l !~ /^legacy_run/ }.collect do |line|
+     state,stime,fmri = line.split(/\s+/)
+     status =  case state
+               when /online/; :running
+               when /maintenance/; :maintenance
+               else :stopped
+               end
+     new({:name => fmri, :ensure => status})
+   end
   end
 
   def enable
@@ -54,10 +67,10 @@ Puppet::Type.type(:service).provide :smf, :parent => :base do
   def startcmd
     self.setupservice
     case self.status
-    when :stopped
-      [command(:adm), :enable, @resource[:name]]
     when :maintenance
       [command(:adm), :clear, @resource[:name]]
+    else
+      [command(:adm), :enable, "-s", @resource[:name]]
     end
   end
 
@@ -97,7 +110,7 @@ Puppet::Type.type(:service).provide :smf, :parent => :base do
   end
 
   def stopcmd
-    [command(:adm), :disable, @resource[:name]]
+    [command(:adm), :disable, "-s", @resource[:name]]
   end
 end
 

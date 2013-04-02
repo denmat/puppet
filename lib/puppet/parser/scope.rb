@@ -1,14 +1,22 @@
 # The scope class, which handles storing and retrieving variables and types and
 # such.
+require 'forwardable'
 
 require 'puppet/parser/parser'
 require 'puppet/parser/templatewrapper'
-require 'puppet/transportable'
-require 'strscan'
 
 require 'puppet/resource/type_collection_helper'
+require 'puppet/util/methodhelper'
 
+# This class is part of the internal parser/evaluator/compiler functionality of Puppet.
+# It is passed between the various classes that participate in evaluation.
+# None of its methods are API except those that are clearly marked as such.
+#
+# @api public
 class Puppet::Parser::Scope
+  extend Forwardable
+  include Puppet::Util::MethodHelper
+
   include Puppet::Resource::TypeCollectionHelper
   require 'puppet/parser/resource'
 
@@ -18,75 +26,99 @@ class Puppet::Parser::Scope
 
   include Enumerable
   include Puppet::Util::Errors
-  attr_accessor :level, :source, :resource
+  attr_accessor :source, :resource
   attr_accessor :base, :keyword
   attr_accessor :top, :translated, :compiler
   attr_accessor :parent
   attr_reader :namespaces
 
+  # Add some alias methods that forward to the compiler, since we reference
+  # them frequently enough to justify the extra method call.
+  def_delegators :compiler, :catalog, :environment
+
   # thin wrapper around an ephemeral
   # symbol table.
   # when a symbol
   class Ephemeral
+    extend Forwardable
+
     def initialize(parent=nil)
       @symbols = {}
       @parent = parent
     end
 
-    [:include?, :delete, :[]=].each do |m|
-      define_method(m) do |*args|
-        @symbols.send(m, *args)
-      end
-    end
+    def_delegators :@symbols, :include?, :delete, :[]=
 
     def [](name)
-      unless @symbols.include?(name) or @parent.nil?
-        @parent[name]
-      else
+      if @symbols.include?(name) or @parent.nil?
         @symbols[name]
+      else
+        @parent[name]
       end
     end
   end
 
-  # A demeterific shortcut to the catalog.
-  def catalog
-    compiler.catalog
+  # Initialize a new scope suitable for parser function testing.  This method
+  # should be considered a public API for external modules.  A shared spec
+  # helper should consume this API method.
+  #
+  # @api protected
+  #
+  def self.new_for_test_harness(node_name)
+    node = Puppet::Node.new(node_name)
+    compiler = Puppet::Parser::Compiler.new(node)
+    scope = new(compiler)
+    scope.source = Puppet::Resource::Type.new(:node, node_name)
+    scope.parent = compiler.topscope
+    scope
   end
 
-  def environment
-    compiler.environment
+  def each
+    to_hash.each { |name, value| yield(name, value) }
   end
 
   # Proxy accessors
   def host
-    @compiler.node.name
+    compiler.node.name
+  end
+
+  def facts
+    compiler.node.facts
+  end
+
+  def include?(name)
+    ! self[name].nil?
   end
 
   # Is the value true?  This allows us to control the definition of truth
   # in one place.
   def self.true?(value)
-    (value != false and value != "" and value != :undef)
+    case value
+    when ''
+      false
+    when :undef
+      false
+    else
+      !!value
+    end
   end
 
-  # Is the value a number?, return the correct object or nil if not a number
+  # Coerce value to a number, or return `nil` if it isn't one.
   def self.number?(value)
-    return nil unless value.is_a?(Fixnum) or value.is_a?(Bignum) or value.is_a?(Float) or value.is_a?(String)
-
-    if value.is_a?(String)
-      if value =~ /^-?\d+(:?\.\d+|(:?\.\d+)?e\d+)$/
-        return value.to_f
-      elsif value =~ /^0x[0-9a-f]+$/i
-        return value.to_i(16)
-      elsif value =~ /^0[0-7]+$/
-        return value.to_i(8)
-      elsif value =~ /^-?\d+$/
-        return value.to_i
-      else
-        return nil
-      end
+    case value
+    when Numeric
+      value
+    when /^-?\d+(:?\.\d+|(:?\.\d+)?e\d+)$/
+      value.to_f
+    when /^0x[0-9a-f]+$/i
+      value.to_i(16)
+    when /^0[0-7]+$/
+      value.to_i(8)
+    when /^-?\d+$/
+      value.to_i
+    else
+      nil
     end
-    # it is one of Fixnum,Bignum or Float
-    value
   end
 
   # Add to our list of namespaces.
@@ -99,46 +131,33 @@ class Puppet::Parser::Scope
     end
   end
 
-  # Remove this when rebasing
-  def environment
-    compiler.environment
-  end
-
-  # Are we the top scope?
-  def topscope?
-    @level == 1
-  end
-
-  def find_hostclass(name)
-    known_resource_types.find_hostclass(namespaces, name)
+  def find_hostclass(name, options = {})
+    known_resource_types.find_hostclass(namespaces, name, options)
   end
 
   def find_definition(name)
     known_resource_types.find_definition(namespaces, name)
   end
 
-  def findresource(string, name = nil)
-    compiler.findresource(string, name)
-  end
+  # This just delegates directly.
+  def_delegator :compiler, :findresource
 
   # Initialize our new scope.  Defaults to having no parent.
-  def initialize(hash = {})
-    if hash.include?(:namespace)
-      if n = hash[:namespace]
-        @namespaces = [n]
-      end
-      hash.delete(:namespace)
+  def initialize(compiler, options = {})
+    if compiler.is_a? Puppet::Parser::Compiler
+      self.compiler = compiler
+    else
+      raise Puppet::DevError, "you must pass a compiler instance to a new scope object"
+    end
+
+    if n = options.delete(:namespace)
+      @namespaces = [n]
     else
       @namespaces = [""]
     end
-    hash.each { |name, val|
-      method = name.to_s + "="
-      if self.respond_to? method
-        self.send(method, val)
-      else
-        raise Puppet::DevError, "Invalid scope argument #{name}"
-      end
-    }
+
+    raise Puppet::DevError, "compiler passed in options" if options.include? :compiler
+    set_options(options)
 
     extend_with_functions_module
 
@@ -169,8 +188,11 @@ class Puppet::Parser::Scope
   # Store the fact that we've evaluated a class, and store a reference to
   # the scope in which it was evaluated, so that we can look it up later.
   def class_set(name, scope)
-    return parent.class_set(name,scope) if parent
-    @class_scopes[name] = scope
+    if parent
+      parent.class_set(name, scope)
+    else
+      @class_scopes[name] = scope
+    end
   end
 
   # Return the scope associated with a class.  This is just here so
@@ -191,7 +213,7 @@ class Puppet::Parser::Scope
     values = {}
 
     # first collect the values from the parents
-    unless parent.nil?
+    if parent
       parent.lookupdefaults(type).each { |var,value|
         values[var] = value
       }
@@ -205,8 +227,6 @@ class Puppet::Parser::Scope
       }
     end
 
-    #Puppet.debug "Got defaults for %s: %s" %
-    #    [type,values.inspect]
     values
   end
 
@@ -215,62 +235,91 @@ class Puppet::Parser::Scope
     find_definition(name) || find_hostclass(name)
   end
 
-  def lookup_qualified_var(name, usestring)
-    parts = name.split(/::/)
-    shortname = parts.pop
-    klassname = parts.join("::")
-    klass = find_hostclass(klassname)
-    unless klass
-      warning "Could not look up qualified variable '#{name}'; class #{klassname} could not be found"
-      return usestring ? "" : :undefined
-    end
-    unless kscope = class_scope(klass)
-      warning "Could not look up qualified variable '#{name}'; class #{klassname} has not been evaluated"
-      return usestring ? "" : :undefined
-    end
-    kscope.lookupvar(shortname, usestring)
-  end
-
-  private :lookup_qualified_var
-
-  # Look up a variable.  The simplest value search we do.  Default to returning
-  # an empty string for missing values, but support returning a constant.
-  def lookupvar(name, usestring = true)
-    table = ephemeral?(name) ? @ephemeral.last : @symtable
-    # If the variable is qualified, then find the specified scope and look the variable up there instead.
-    if name =~ /::/
-      return lookup_qualified_var(name, usestring)
-    end
-    # We can't use "if table[name]" here because the value might be false
-    if ephemeral_include?(name) or table.include?(name)
-      if usestring and table[name] == :undef
-        return ""
-      else
-        return table[name]
-      end
-    elsif self.parent
-      return parent.lookupvar(name, usestring)
-    elsif usestring
-      return ""
+  def undef_as(x,v)
+    if v.nil? or v == :undef
+      x
     else
-      return :undefined
+      v
     end
   end
+
+  # Lookup a variable within this scope using the Puppet language's
+  # scoping rules. Variables can be qualified using just as in a
+  # manifest.
+  #
+  # @param [String] name the variable name to lookup
+  #
+  # @return Object the value of the variable, or nil if it's not found
+  #
+  # @api public
+  def lookupvar(name, options = {})
+    unless name.is_a? String
+      raise Puppet::DevError, "Scope variable name is a #{name.class}, not a string"
+    end
+
+    # Save the originating scope for the request
+    options[:origin] = self unless options[:origin]
+    table = ephemeral?(name) ? @ephemeral.last : @symtable
+
+    if name =~ /^(.*)::(.+)$/
+      begin
+        qualified_scope($1).lookupvar($2, options.merge({:origin => nil}))
+      rescue RuntimeError => e
+        location = (options[:file] && (options[:line] || options[:lineproc])) ? " at #{options[:file]}:#{options[:line]|| options[:lineproc].call}" : ''
+        warning "Could not look up qualified variable '#{name}'; #{e.message}#{location}"
+        nil
+      end
+    # If the value is present and either we are top/node scope or originating scope...
+    elsif (ephemeral_include?(name) or table.include?(name)) and (compiler and self == compiler.topscope or (resource and resource.type == "Node") or self == options[:origin])
+      table[name]
+    elsif resource and resource.type == "Class" and parent_type = resource.resource_type.parent
+      qualified_scope(parent_type).lookupvar(name, options.merge({:origin => nil}))
+    elsif parent
+      parent.lookupvar(name, options)
+    else
+      nil
+    end
+  end
+
+  # Retrieves the variable value assigned to the name given as an argument. The name must be a String,
+  # and namespace can be qualified with '::'. The value is looked up in this scope, its parent scopes,
+  # or in a specific visible named scope.
+  #
+  # @param varname [String] the name of the variable (may be a qualified name using `(ns'::')*varname`
+  # @param options [Hash] Additional options, not part of api.
+  # @return [Object] the value assigned to the given varname
+  # @see #[]=
+  # @api public
+  #
+  def [](varname, options={})
+    lookupvar(varname, options)
+  end
+
+  def qualified_scope(classname)
+    raise "class #{classname} could not be found"     unless klass = find_hostclass(classname)
+    raise "class #{classname} has not been evaluated" unless kscope = class_scope(klass)
+    kscope
+  end
+  private :qualified_scope
 
   # Return a hash containing our variables and their values, optionally (and
   # by default) including the values defined in our parent.  Local values
   # shadow parent values.
   def to_hash(recursive = true)
-    target = parent.to_hash(recursive) if recursive and parent
-    target ||= Hash.new
-    @symtable.keys.each { |name|
-      value = @symtable[name]
+    if recursive and parent
+      target = parent.to_hash(recursive)
+    else
+      target = Hash.new
+    end
+
+    @symtable.each do |name, value|
       if value == :undef
         target.delete(name)
       else
         target[name] = value
       end
-    }
+    end
+
     target
   end
 
@@ -289,28 +338,16 @@ class Puppet::Parser::Scope
     @parent.source.module_name
   end
 
-  # Return the list of scopes up to the top scope, ordered with our own first.
-  # This is used for looking up variables and defaults.
-  def scope_path
-    if parent
-      [self, parent.scope_path].flatten.compact
-    else
-      [self]
-    end
-  end
-
   # Set defaults for a type.  The typename should already be downcased,
   # so that the syntax is isolated.  We don't do any kind of type-checking
   # here; instead we let the resource do it when the defaults are used.
-  def setdefaults(type, params)
+  def define_settings(type, params)
     table = @defaults[type]
 
     # if we got a single param, it'll be in its own array
     params = [params] unless params.is_a?(Array)
 
     params.each { |param|
-      #Puppet.debug "Default for %s is %s => %s" %
-      #    [type,ary[0].inspect,ary[1].inspect]
       if table.include?(param.name)
         raise Puppet::ParseError.new("Default already defined for #{type} { #{param.name} }; cannot redefine", param.line, param.file)
       end
@@ -321,114 +358,68 @@ class Puppet::Parser::Scope
   # Set a variable in the current scope.  This will override settings
   # in scopes above, but will not allow variables in the current scope
   # to be reassigned.
-  def setvar(name,value, options = {})
+  #   It's preferred that you use self[]= instead of this; only use this
+  # when you need to set options.
+  def setvar(name, value, options = {})
+    unless name.is_a? String
+      raise Puppet::DevError, "Scope variable name is a #{name.class}, not a string"
+    end
+
     table = options[:ephemeral] ? @ephemeral.last : @symtable
-    #Puppet.debug "Setting %s to '%s' at level %s mode append %s" %
-    #    [name.inspect,value,self.level, append]
     if table.include?(name)
-      unless options[:append]
-        error = Puppet::ParseError.new("Cannot reassign variable #{name}")
-      else
+      if options[:append]
         error = Puppet::ParseError.new("Cannot append, variable #{name} is defined in this scope")
+      else
+        error = Puppet::ParseError.new("Cannot reassign variable #{name}")
       end
       error.file = options[:file] if options[:file]
       error.line = options[:line] if options[:line]
       raise error
     end
 
-    unless options[:append]
+    if options[:append]
+      table[name] = append_value(undef_as('', self[name]), value)
+    else
       table[name] = value
-    else # append case
-      # lookup the value in the scope if it exists and insert the var
-      table[name] = lookupvar(name)
-      # concatenate if string, append if array, nothing for other types
-      case value
-      when Array
-        table[name] += value
-      when Hash
-        raise ArgumentError, "Trying to append to a hash with something which is not a hash is unsupported" unless value.is_a?(Hash)
-        table[name].merge!(value)
-      else
-        table[name] << value
-      end
     end
   end
 
-  # Return an interpolated string.
-  def strinterp(string, file = nil, line = nil)
-    # Most strings won't have variables in them.
-    ss = StringScanner.new(string)
-    out = ""
-    while not ss.eos?
-      if ss.scan(/^\$\{((\w*::)*\w+|[0-9]+)\}|^\$([0-9])|^\$((\w*::)*\w+)/)
-        # If it matches the backslash, then just retun the dollar sign.
-        if ss.matched == '\\$'
-          out << '$'
-        else # look the variable up
-          # make sure $0-$9 are lookupable only if ephemeral
-          var = ss[1] || ss[3] || ss[4]
-          if var and var =~ /^[0-9]+$/ and not ephemeral_include?(var)
-            next
-          end
-          out << lookupvar(var).to_s || ""
-        end
-      elsif ss.scan(/^\\(.)/)
-        # Puppet.debug("Got escape: pos:%d; m:%s" % [ss.pos, ss.matched])
-        case ss[1]
-        when 'n'
-          out << "\n"
-        when 't'
-          out << "\t"
-        when 's'
-          out << " "
-        when '\\'
-          out << '\\'
-        when '$'
-          out << '$'
-        else
-          str = "Unrecognised escape sequence '#{ss.matched}'"
-          str += " in file #{file}" if file
-          str += " at line #{line}" if line
-          Puppet.warning str
-          out << ss.matched
-        end
-      elsif ss.scan(/^\$/)
-        out << '$'
-      elsif ss.scan(/^\\\n/) # an escaped carriage return
-        next
-      else
-        tmp = ss.scan(/[^\\$]+/)
-        # Puppet.debug("Got other: pos:%d; m:%s" % [ss.pos, tmp])
-        unless tmp
-          error = Puppet::ParseError.new("Could not parse string #{string.inspect}")
-          {:file= => file, :line= => line}.each do |m,v|
-            error.send(m, v) if v
-          end
-          raise error
-        end
-        out << tmp
+  # Sets the variable value of the name given as an argument to the given value. The value is
+  # set in the current scope and may shadow a variable with the same name in a visible outer scope.
+  # It is illegal to re-assign a variable in the same scope. It is illegal to set a variable in some other
+  # scope/namespace than the scope passed to a method.
+  #
+  # @param varname [String] The variable name to which the value is assigned. Must not contain `::`
+  # @param value [String] The value to assign to the given variable name.
+  # @param options [Hash] Additional options, not part of api.
+  #
+  # @api public
+  #
+  def []=(varname, value, options = {})
+    setvar(varname, value, options = {})
+  end
+
+  def append_value(bound_value, new_value)
+    case new_value
+    when Array
+      bound_value + new_value
+    when Hash
+      bound_value.merge(new_value)
+    else
+      if bound_value.is_a?(Hash)
+        raise ArgumentError, "Trying to append to a hash with something which is not a hash is unsupported"
       end
+      bound_value + new_value
     end
-
-    out
   end
+  private :append_value
 
-  # Return the tags associated with this scope.  It's basically
-  # just our parents' tags, plus our type.  We don't cache this value
-  # because our parent tags might change between calls.
-  def tags
-    resource.tags
-  end
+  # Return the tags associated with this scope.
+  def_delegator :resource, :tags
 
   # Used mainly for logging
   def to_s
     "Scope(#{@resource})"
-  end
-
-  # Undefine a variable; only used for testing.
-  def unsetvar(var)
-    table = ephemeral?(var) ? @ephemeral.last : @symtable
-    table.delete(var) if table.include?(var)
   end
 
   # remove ephemeral scope up to level
@@ -436,6 +427,9 @@ class Puppet::Parser::Scope
     if level == :all
       @ephemeral = [ Ephemeral.new ]
     else
+      # If we ever drop 1.8.6 and lower, this should be replaced by a single
+      # pop-with-a-count - or if someone more ambitious wants to monkey-patch
+      # that feature into older rubies. --daniel 2012-07-16
       (@ephemeral.size - level).times do
         @ephemeral.pop
       end
@@ -444,10 +438,7 @@ class Puppet::Parser::Scope
 
   # check if name exists in one of the ephemeral scope.
   def ephemeral_include?(name)
-    @ephemeral.reverse.each do |eph|
-      return true if eph.include?(name)
-    end
-    false
+    @ephemeral.any? {|eph| eph.include?(name) }
   end
 
   # is name an ephemeral variable?
@@ -488,6 +479,20 @@ class Puppet::Parser::Scope
     environment.known_resource_types.find_definition(namespaces, type.to_s.downcase)
   end
 
+  def method_missing(method, *args, &block)
+    method.to_s =~ /^function_(.*)$/
+    name = $1
+    super unless name
+    super unless Puppet::Parser::Functions.function(name)
+    # In odd circumstances, this might not end up defined by the previous
+    # method, so we might as well be certain.
+    if respond_to? method
+      send(method, *args)
+    else
+      raise Puppet::DevError, "Function #{name} not defined despite being loaded!"
+    end
+  end
+
   def resolve_type_and_titles(type, titles)
     raise ArgumentError, "titles must be an array" unless titles.is_a?(Array)
 
@@ -513,6 +518,6 @@ class Puppet::Parser::Scope
 
   def extend_with_functions_module
     extend Puppet::Parser::Functions.environment_module(Puppet::Node::Environment.root)
-    extend Puppet::Parser::Functions.environment_module(compiler ? environment : nil)
+    extend Puppet::Parser::Functions.environment_module(environment) if environment != Puppet::Node::Environment.root
   end
 end

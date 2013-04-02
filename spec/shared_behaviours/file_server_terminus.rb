@@ -1,13 +1,9 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2007-10-18.
-#  Copyright (c) 2007. All rights reserved.
-
+#! /usr/bin/env ruby
 shared_examples_for "Puppet::Indirector::FileServerTerminus" do
   # This only works if the shared behaviour is included before
   # the 'before' block in the including context.
   before do
-    Puppet::Util::Cacher.expire
+    Puppet::FileServing::Configuration.instance_variable_set(:@configuration, nil)
     FileTest.stubs(:exists?).returns true
     FileTest.stubs(:exists?).with(Puppet[:fileserverconfig]).returns(true)
 
@@ -31,7 +27,7 @@ shared_examples_for "Puppet::Indirector::FileServerTerminus" do
     # Stub out the modules terminus
     @modules = mock 'modules terminus'
 
-    @request = Puppet::Indirector::Request.new(:indirection, :method, "puppet://myhost/one/myfile")
+    @request = Puppet::Indirector::Request.new(:indirection, :method, "puppet://myhost/one/myfile", nil)
   end
 
   it "should use the file server configuration to find files" do

@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 require 'shared_behaviours/all_parsedfile_providers'
 
 require 'puppet_spec/files'

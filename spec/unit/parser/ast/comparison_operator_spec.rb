@@ -1,10 +1,12 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe Puppet::Parser::AST::ComparisonOperator do
   before :each do
-    @scope = Puppet::Parser::Scope.new
+    node     = Puppet::Node.new('localhost')
+    compiler = Puppet::Parser::Compiler.new(node)
+    @scope   = Puppet::Parser::Scope.new(compiler)
+
     @one = Puppet::Parser::AST::Leaf.new(:value => "1")
     @two = Puppet::Parser::AST::Leaf.new(:value => "2")
 
@@ -95,8 +97,8 @@ describe Puppet::Parser::AST::ComparisonOperator do
     one = Puppet::Parser::AST::Variable.new( :value => "one" )
     two = Puppet::Parser::AST::Variable.new( :value => "two" )
 
-    @scope.expects(:lookupvar).with("one", false).returns(1)
-    @scope.expects(:lookupvar).with("two", false).returns(2)
+    one.expects(:safeevaluate).with(@scope).returns(1)
+    two.expects(:safeevaluate).with(@scope).returns(2)
 
     operator = Puppet::Parser::AST::ComparisonOperator.new :lval => one, :operator => "<", :rval => two
     operator.evaluate(@scope).should == true

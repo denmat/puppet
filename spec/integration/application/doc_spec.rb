@@ -1,12 +1,12 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 require 'puppet_spec/files'
+require 'puppet/application/doc'
 
 describe Puppet::Application::Doc do
   include PuppetSpec::Files
 
-  it "should not generate an error when module dir overlaps parent of site.pp (#4798)" do
+  it "should not generate an error when module dir overlaps parent of site.pp (#4798)", :if => Puppet.features.rdoc1?, :unless => Puppet.features.microsoft_windows? do
     begin
       # Note: the directory structure below is more complex than it
       # needs to be, but it's representative of the directory structure
@@ -37,8 +37,8 @@ describe Puppet::Application::Doc do
       Puppet[:modulepath] = modules_dir
       Puppet[:manifest] = site_file
       puppet.options[:mode] = :rdoc
-      puppet.expects(:exit).with(0)
-      puppet.run_command
+
+      expect { puppet.run_command }.to exit_with 0
 
       File.should be_exist('doc')
     ensure

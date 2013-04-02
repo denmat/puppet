@@ -1,12 +1,7 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe Puppet::Parser::Functions do
-  before :each do
-    Puppet::Parser::Functions.rmfunction("template") if Puppet::Parser::Functions.function("template")
-  end
-
   it "should support multiple threads autoloading the same function" do
     threads = []
     lambda {

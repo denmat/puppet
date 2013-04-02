@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'yaml'
 require 'puppet/util/storage'
@@ -9,7 +8,7 @@ describe Puppet::Util::Storage do
   include PuppetSpec::Files
 
   before(:all) do
-    @basepath = Puppet.features.posix? ? "/somepath" : "C:/somepath"
+    @basepath = make_absolute("/somepath")
     Puppet[:statedir] = tmpdir("statedir")
   end
 
@@ -42,7 +41,7 @@ describe Puppet::Util::Storage do
 
   describe "when caching a Puppet::Type" do
     before(:all) do
-      @file_test = Puppet::Type.type(:file).new(:name => @basepath+"/yayness", :check => %w{checksum type})
+      @file_test = Puppet::Type.type(:file).new(:name => @basepath+"/yayness", :audit => %w{checksum type})
       @exec_test = Puppet::Type.type(:exec).new(:name => @basepath+"/bin/ls /yayness")
     end
 
@@ -166,15 +165,6 @@ describe Puppet::Util::Storage do
         Dir.rmdir(Puppet[:statefile])
       end
 
-      it "should fail gracefully on load() if it cannot get a read lock on the state file" do
-        Puppet::Util::FileLocking.expects(:readlock).yields(false)
-        test_yaml = {'File["/yayness"]'=>{"name"=>{:a=>:b,:c=>:d}}}
-        YAML.expects(:load).returns(test_yaml)
-
-        proc { Puppet::Util::Storage.load }.should_not raise_error
-        Puppet::Util::Storage.state.should == test_yaml
-      end
-
       after(:each) do
         @state_file.close!()
         Puppet[:statefile] = @saved_statefile
@@ -184,13 +174,12 @@ describe Puppet::Util::Storage do
 
   describe "when storing to the state file" do
     before(:each) do
-      @state_file = Tempfile.new('storage_test')
+      @state_file = tmpfile('storage_test')
       @saved_statefile = Puppet[:statefile]
-      Puppet[:statefile] = @state_file.path
+      Puppet[:statefile] = @state_file
     end
 
     it "should create the state file if it does not exist" do
-      @state_file.close!()
       FileTest.exists?(Puppet[:statefile]).should be_false
       Puppet::Util::Storage.cache(:yayness)
 
@@ -199,20 +188,12 @@ describe Puppet::Util::Storage do
     end
 
     it "should raise an exception if the state file is not a regular file" do
-      @state_file.close!()
       Dir.mkdir(Puppet[:statefile])
       Puppet::Util::Storage.cache(:yayness)
 
       proc { Puppet::Util::Storage.store }.should raise_error
 
       Dir.rmdir(Puppet[:statefile])
-    end
-
-    it "should raise an exception if it cannot get a write lock on the state file" do
-      Puppet::Util::FileLocking.expects(:writelock).yields(false)
-      Puppet::Util::Storage.cache(:yayness)
-
-      proc { Puppet::Util::Storage.store }.should raise_error
     end
 
     it "should load() the same information that it store()s" do
@@ -224,11 +205,6 @@ describe Puppet::Util::Storage do
       Puppet::Util::Storage.state.should == {}
       proc { Puppet::Util::Storage.load }.should_not raise_error
       Puppet::Util::Storage.state.should == {:yayness=>{}}
-    end
-
-    after(:each) do
-      @state_file.close!()
-      Puppet[:statefile] = @saved_statefile
     end
   end
 end

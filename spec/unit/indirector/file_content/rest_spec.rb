@@ -1,11 +1,14 @@
-#!/usr/bin/env ruby
+#! /usr/bin/env ruby
+require 'spec_helper'
 
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+require 'puppet/indirector/file_content/rest'
 
-require 'puppet/indirector/file_content'
-
-describe "Puppet::Indirector::Content::Rest" do
+describe Puppet::Indirector::FileContent::Rest do
   it "should add the node's cert name to the arguments"
 
   it "should set the content type to text/plain"
+
+  it "should use the :fileserver SRV service" do
+    Puppet::Indirector::FileContent::Rest.srv_service.should == :fileserver
+  end
 end

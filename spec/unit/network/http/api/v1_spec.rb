@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/network/http/api/v1'
 
@@ -32,7 +31,7 @@ describe Puppet::Network::HTTP::API::V1 do
     end
 
     it "should use the first field of the URI as the environment" do
-      @tester.uri2indirection("GET", "/env/foo/bar", {})[3][:environment].should == "env"
+      @tester.uri2indirection("GET", "/env/foo/bar", {})[3][:environment].to_s.should == "env"
     end
 
     it "should fail if the environment is not alphanumeric" do
@@ -40,7 +39,27 @@ describe Puppet::Network::HTTP::API::V1 do
     end
 
     it "should use the environment from the URI even if one is specified in the parameters" do
-      @tester.uri2indirection("GET", "/env/foo/bar", {:environment => "otherenv"})[3][:environment].should == "env"
+      @tester.uri2indirection("GET", "/env/foo/bar", {:environment => "otherenv"})[3][:environment].to_s.should == "env"
+    end
+
+    it "should not pass a buck_path parameter through (See Bugs #13553, #13518, #13511)" do
+      @tester.uri2indirection("GET", "/env/foo/bar", { :bucket_path => "/malicious/path" })[3].should_not include({ :bucket_path => "/malicious/path" })
+    end
+
+    it "should pass allowed parameters through" do
+      @tester.uri2indirection("GET", "/env/foo/bar", { :allowed_param => "value" })[3].should include({ :allowed_param => "value" })
+    end
+
+    it "should return the environment as a Puppet::Node::Environment" do
+      @tester.uri2indirection("GET", "/env/foo/bar", {})[3][:environment].should be_a Puppet::Node::Environment
+    end
+
+    it "should not pass a buck_path parameter through (See Bugs #13553, #13518, #13511)" do
+      @tester.uri2indirection("GET", "/env/foo/bar", { :bucket_path => "/malicious/path" })[3].should_not include({ :bucket_path => "/malicious/path" })
+    end
+
+    it "should pass allowed parameters through" do
+      @tester.uri2indirection("GET", "/env/foo/bar", { :allowed_param => "value" })[3].should include({ :allowed_param => "value" })
     end
 
     it "should use the second field of the URI as the indirection name" do
@@ -66,6 +85,10 @@ describe Puppet::Network::HTTP::API::V1 do
 
     it "should choose 'find' as the indirection method if the http method is a GET and the indirection name is singular" do
       @tester.uri2indirection("GET", "/env/foo/bar", {})[1].should == :find
+    end
+
+    it "should choose 'find' as the indirection method if the http method is a POST and the indirection name is singular" do
+      @tester.uri2indirection("POST", "/env/foo/bar", {})[1].should == :find
     end
 
     it "should choose 'head' as the indirection method if the http method is a HEAD and the indirection name is singular" do
@@ -116,6 +139,10 @@ describe Puppet::Network::HTTP::API::V1 do
       @tester.uri2indirection("GET", "/env/statuses/bar", {})[0].should == 'status'
     end
 
+    it "should change indirection name to 'probe' if the http method is a GET and the indirection name is probes" do
+      @tester.uri2indirection("GET", "/env/probes/bar", {})[0].should == 'probe'
+    end
+
     it "should choose 'delete' as the indirection method if the http method is a DELETE and the indirection name is singular" do
       @tester.uri2indirection("DELETE", "/env/foo/bar", {})[1].should == :destroy
     end
@@ -137,7 +164,7 @@ describe Puppet::Network::HTTP::API::V1 do
 
   describe "when converting a request into a URI" do
     before do
-      @request = Puppet::Indirector::Request.new(:foo, :find, "with spaces", :foo => :bar, :environment => "myenv")
+      @request = Puppet::Indirector::Request.new(:foo, :find, "with spaces", nil, :foo => :bar, :environment => "myenv")
     end
 
     it "should use the environment as the first field of the URI" do
@@ -164,4 +191,26 @@ describe Puppet::Network::HTTP::API::V1 do
     end
   end
 
+  describe "when converting a request into a URI with body" do
+    before :each do
+      @request = Puppet::Indirector::Request.new(:foo, :find, "with spaces", nil, :foo => :bar, :environment => "myenv")
+    end
+
+    it "should use the environment as the first field of the URI" do
+      @tester.request_to_uri_and_body(@request).first.split("/")[1].should == "myenv"
+    end
+
+    it "should use the indirection as the second field of the URI" do
+      @tester.request_to_uri_and_body(@request).first.split("/")[2].should == "foo"
+    end
+
+    it "should use the escaped key as the remainder of the URI" do
+      escaped = URI.escape("with spaces")
+      @tester.request_to_uri_and_body(@request).first.split("/")[3].sub(/\?.+/, '').should == escaped
+    end
+
+    it "should return the URI and body separately" do
+      @tester.request_to_uri_and_body(@request).should == ["/myenv/foo/with%20spaces", "foo=bar"]
+    end
+  end
 end

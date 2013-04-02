@@ -1,19 +1,12 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2007-4-8.
-#  Copyright (c) 2008. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe Puppet::Resource::Catalog do
-  describe "when pson is available", :if => Puppet.features.pson? do
-    it "should support pson" do
-      Puppet::Resource::Catalog.supported_formats.should be_include(:pson)
-    end
+  it "should support pson" do
+    Puppet::Resource::Catalog.supported_formats.should be_include(:pson)
   end
 
   describe "when using the indirector" do
-    after { Puppet::Util::Cacher.expire }
     before do
       # This is so the tests work w/out networking.
       Facter.stubs(:to_hash).returns({"hostname" => "foo.domain.com"})
@@ -53,6 +46,7 @@ describe Puppet::Resource::Catalog do
       Puppet::Resource::Catalog.indirection.stubs(:terminus).returns terminus
 
       node = mock 'node'
+      terminus.stubs(:validate)
       terminus.expects(:find).with { |request| request.options[:use_node] == node }
       Puppet::Resource::Catalog.indirection.find("me", :use_node => node)
     end

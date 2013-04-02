@@ -1,10 +1,15 @@
+require 'puppet/parser/type_loader'
+
 class Puppet::Resource::TypeCollection
   attr_reader :environment
+  attr_accessor :parse_failed
 
   def clear
     @hostclasses.clear
     @definitions.clear
     @nodes.clear
+    @watched_files.clear
+    @notfound.clear
   end
 
   def initialize(env)
@@ -12,6 +17,7 @@ class Puppet::Resource::TypeCollection
     @hostclasses = {}
     @definitions = {}
     @nodes = {}
+    @notfound = {}
 
     # So we can keep a list and match the first-defined regex
     @node_list = []
@@ -66,7 +72,6 @@ class Puppet::Resource::TypeCollection
   end
 
   def loader
-    require 'puppet/parser/type_loader'
     @loader ||= Puppet::Parser::TypeLoader.new(environment)
   end
 
@@ -106,8 +111,8 @@ class Puppet::Resource::TypeCollection
     @nodes[munge_name(name)]
   end
 
-  def find_hostclass(namespaces, name)
-    find_or_load(namespaces, name, :hostclass)
+  def find_hostclass(namespaces, name, options = {})
+    find_or_load(namespaces, name, :hostclass, options)
   end
 
   def find_definition(namespaces, name)
@@ -118,6 +123,10 @@ class Puppet::Resource::TypeCollection
     define_method(m) do
       instance_variable_get("@#{m}").dup
     end
+  end
+
+  def require_reparse?
+    @parse_failed || stale?
   end
 
   def stale?
@@ -132,7 +141,7 @@ class Puppet::Resource::TypeCollection
       return @version
     end
 
-    @version = Puppet::Util.execute([environment[:config_version]]).strip
+    @version = Puppet::Util::Execution.execute([environment[:config_version]]).strip
 
   rescue Puppet::ExecutionFailure => e
     raise Puppet::ParseError, "Unable to set config_version: #{e.message}"
@@ -185,14 +194,21 @@ class Puppet::Resource::TypeCollection
 
   # Resolve namespaces and find the given object.  Autoload it if
   # necessary.
-  def find_or_load(namespaces, name, type)
-    resolve_namespaces(namespaces, name).each do |fqname|
-      if result = send(type, fqname) || loader.try_load_fqname(type, fqname)
-        return result
+  def find_or_load(namespaces, name, type, options = {})
+    searchspace = options[:assume_fqname] ? [name].flatten : resolve_namespaces(namespaces, name)
+    searchspace.each do |fqname|
+      result = send(type, fqname)
+      unless result
+        # do not try to autoload if we already tried and it wasn't conclusive
+        # as this is a time consuming operation.
+        unless @notfound[fqname]
+          result = loader.try_load_fqname(type, fqname)
+          @notfound[fqname] = result.nil?
+        end
       end
+      return result if result
     end
 
-    # Nothing found.
     return nil
   end
 

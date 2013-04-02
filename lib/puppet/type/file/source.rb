@@ -12,73 +12,75 @@ module Puppet
     include Puppet::Util::Diff
 
     attr_accessor :source, :local
-    desc "Copy a file over the current file.  Uses `checksum` to
-      determine when a file should be copied.  Valid values are either
-      fully qualified paths to files, or URIs.  Currently supported URI
-      types are *puppet* and *file*.
+    desc <<-'EOT'
+      A source file, which will be copied into place on the local system.
+      Values can be URIs pointing to remote files, or fully qualified paths to
+      files available on the local system (including files on NFS shares or
+      Windows mapped drives). This attribute is mutually exclusive with
+      `content` and `target`.
 
-      This is one of the primary mechanisms for getting content into
-      applications that Puppet does not directly support and is very
-      useful for those configuration files that don't change much across
-      sytems.  For instance:
+      The available URI schemes are *puppet* and *file*. *Puppet*
+      URIs will retrieve files from Puppet's built-in file server, and are
+      usually formatted as:
 
-          class sendmail {
-            file { \"/etc/mail/sendmail.cf\":
-              source => \"puppet://server/modules/module_name/sendmail.cf\"
-            }
-          }
+      `puppet:///modules/name_of_module/filename`
 
-      You can also leave out the server name, in which case `puppet agent`
-      will fill in the name of its configuration server and `puppet apply`
-      will use the local filesystem.  This makes it easy to use the same
-      configuration in both local and centralized forms.
+      This will fetch a file from a module on the puppet master (or from a
+      local module when using puppet apply). Given a `modulepath` of
+      `/etc/puppetlabs/puppet/modules`, the example above would resolve to
+      `/etc/puppetlabs/puppet/modules/name_of_module/files/filename`.
 
-      Currently, only the `puppet` scheme is supported for source
-      URL's. Puppet will connect to the file server running on
-      `server` to retrieve the contents of the file. If the
-      `server` part is empty, the behavior of the command-line
-      interpreter (`puppet apply`) and the client demon (`puppet agent`) differs
-      slightly: `apply` will look such a file up on the module path
-      on the local host, whereas `agent` will connect to the
-      puppet server that it received the manifest from.
+      Unlike `content`, the `source` attribute can be used to recursively copy
+      directories if the `recurse` attribute is set to `true` or `remote`. If
+      a source directory contains symlinks, use the `links` attribute to
+      specify whether to recreate links or follow them.
 
-      See the [fileserver configuration documentation](http://projects.puppetlabs.com/projects/puppet/wiki/File_Serving_Configuration) for information on how to configure
-      and use file services within Puppet.
+      Multiple `source` values can be specified as an array, and Puppet will
+      use the first source that exists. This can be used to serve different
+      files to different system types:
 
-      If you specify multiple file sources for a file, then the first
-      source that exists will be used.  This allows you to specify
-      what amount to search paths for files:
-
-          file { \"/path/to/my/file\":
+          file { "/etc/nfs.conf":
             source => [
-              \"/modules/nfs/files/file.$host\",
-              \"/modules/nfs/files/file.$operatingsystem\",
-              \"/modules/nfs/files/file\"
+              "puppet:///modules/nfs/conf.$host",
+              "puppet:///modules/nfs/conf.$operatingsystem",
+              "puppet:///modules/nfs/conf"
             ]
           }
 
-      This will use the first found file as the source.
-
-      You cannot currently copy links using this mechanism; set `links`
-      to `follow` if any remote sources are links.
-      "
+      Alternately, when serving directories recursively, multiple sources can
+      be combined by setting the `sourceselect` attribute to `all`.
+    EOT
 
     validate do |sources|
       sources = [sources] unless sources.is_a?(Array)
       sources.each do |source|
+        next if Puppet::Util.absolute_path?(source)
+
         begin
           uri = URI.parse(URI.escape(source))
         rescue => detail
           self.fail "Could not understand source #{source}: #{detail}"
         end
 
-        self.fail "Cannot use URLs of type '#{uri.scheme}' as source for fileserving" unless uri.scheme.nil? or %w{file puppet}.include?(uri.scheme)
+        self.fail "Cannot use relative URLs '#{source}'" unless uri.absolute?
+        self.fail "Cannot use opaque URLs '#{source}'" unless uri.hierarchical?
+        self.fail "Cannot use URLs of type '#{uri.scheme}' as source for fileserving" unless %w{file puppet}.include?(uri.scheme)
       end
     end
 
+    SEPARATOR_REGEX = [Regexp.escape(File::SEPARATOR.to_s), Regexp.escape(File::ALT_SEPARATOR.to_s)].join
+
     munge do |sources|
       sources = [sources] unless sources.is_a?(Array)
-      sources.collect { |source| source.sub(/\/$/, '') }
+      sources.map do |source|
+        source = source.sub(/[#{SEPARATOR_REGEX}]+$/, '')
+
+        if Puppet::Util.absolute_path?(source)
+          URI.unescape(Puppet::Util.path_to_uri(source).to_s)
+        else
+          source
+        end
+      end
     end
 
     def change_to_s(currentvalue, newvalue)
@@ -95,13 +97,14 @@ module Puppet
     end
 
     # Look up (if necessary) and return remote content.
-    cached_attr(:content) do
+    def content
+      return @content if @content
       raise Puppet::DevError, "No source for content was stored with the metadata" unless metadata.source
 
-      unless tmp = Puppet::FileServing::Content.indirection.find(metadata.source)
+      unless tmp = Puppet::FileServing::Content.indirection.find(metadata.source, :environment => resource.catalog.environment, :links => resource[:links])
         fail "Could not find any content at %s" % metadata.source
       end
-      tmp.content
+      @content = tmp.content
     end
 
     # Copy the values from the source to the resource.  Yay.
@@ -114,6 +117,11 @@ module Puppet
         param_name = (metadata_method == :checksum) ? :content : metadata_method
         next if metadata_method == :owner and !Puppet.features.root?
         next if metadata_method == :checksum and metadata.ftype == "directory"
+        next if metadata_method == :checksum and metadata.ftype == "link" and metadata.links == :manage
+
+        if Puppet.features.microsoft_windows?
+          next if [:owner, :group].include?(metadata_method) and !local?
+        end
 
         if resource[param_name].nil? or resource[param_name] == :absent
           resource[param_name] = metadata.send(metadata_method)
@@ -136,33 +144,39 @@ module Puppet
       ! (metadata.nil? or metadata.ftype.nil?)
     end
 
+    attr_writer :metadata
+
     # Provide, and retrieve if necessary, the metadata for this file.  Fail
     # if we can't find data about this host, and fail if there are any
     # problems in our query.
-    cached_attr(:metadata) do
+    def metadata
+      return @metadata if @metadata
       return nil unless value
-      result = nil
       value.each do |source|
         begin
-          if data = Puppet::FileServing::Metadata.indirection.find(source)
-            result = data
-            result.source = source
+          if data = Puppet::FileServing::Metadata.indirection.find(source, :environment => resource.catalog.environment, :links => resource[:links])
+            @metadata = data
+            @metadata.source = source
             break
           end
         rescue => detail
           fail detail, "Could not retrieve file metadata for #{source}: #{detail}"
         end
       end
-      fail "Could not retrieve information from source(s) #{value.join(", ")}" unless result
-      result
+      fail "Could not retrieve information from environment #{resource.catalog.environment} source(s) #{value.join(", ")}" unless @metadata
+      @metadata
     end
 
     def local?
-      found? and uri and (uri.scheme || "file") == "file"
+      found? and scheme == "file"
     end
 
     def full_path
-      URI.unescape(uri.path) if found? and uri
+      Puppet::Util.uri_to_path(uri) if found?
+    end
+
+    def server?
+       uri and uri.host
     end
 
     def server
@@ -172,8 +186,11 @@ module Puppet
     def port
       (uri and uri.port) or Puppet.settings[:masterport]
     end
-
     private
+
+    def scheme
+      (uri and uri.scheme)
+    end
 
     def uri
       @uri ||= URI.parse(URI.escape(metadata.source))

@@ -1,13 +1,14 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 require 'puppet/file_bucket/dipper'
 
 tidy = Puppet::Type.type(:tidy)
 
 describe tidy do
+  include PuppetSpec::Files
+
   before do
-    @basepath = Puppet.features.posix? ? "/what/ever" : "C:/tmp"
+    @basepath = make_absolute("/what/ever")
     Puppet.settings.stubs(:use)
 
     # for an unknown reason some of these specs fails when run individually
@@ -371,7 +372,7 @@ describe tidy do
 
         @tidy.parameter(:size).stubs(:tidy?).returns true
         @tidy.parameter(:age).stubs(:tidy?).returns false
-        @tidy.should be_tidy(@basepath)
+        @tidy.must be_tidy(@basepath)
       end
 
       it "should tidy a file if age and size are set but only age matches" do
@@ -380,7 +381,7 @@ describe tidy do
 
         @tidy.parameter(:size).stubs(:tidy?).returns false
         @tidy.parameter(:age).stubs(:tidy?).returns true
-        @tidy.should be_tidy(@basepath)
+        @tidy.must be_tidy(@basepath)
       end
 
       it "should tidy all files if neither age nor size is set" do

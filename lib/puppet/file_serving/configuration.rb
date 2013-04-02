@@ -1,29 +1,23 @@
-#
-#  Created by Luke Kanies on 2007-10-16.
-#  Copyright (c) 2007. All rights reserved.
-
+require 'monitor'
 require 'puppet'
 require 'puppet/file_serving'
 require 'puppet/file_serving/mount'
 require 'puppet/file_serving/mount/file'
 require 'puppet/file_serving/mount/modules'
 require 'puppet/file_serving/mount/plugins'
-require 'puppet/util/cacher'
 
 class Puppet::FileServing::Configuration
   require 'puppet/file_serving/configuration/parser'
 
-  class << self
-    include Puppet::Util::Cacher
-    cached_attr(:configuration) { new }
+  extend MonitorMixin
+
+  def self.configuration
+    synchronize do
+      @configuration ||= new
+    end
   end
 
   Mount = Puppet::FileServing::Mount
-
-  # Create our singleton configuration.
-  def self.create
-    configuration
-  end
 
   private_class_method  :new
 
@@ -35,16 +29,6 @@ class Puppet::FileServing::Configuration
   def find_mount(mount_name, environment)
     # Reparse the configuration if necessary.
     readconfig
-
-    if mount = mounts[mount_name]
-      return mount
-    end
-
-    if environment.module(mount_name)
-      Puppet::Util::Warnings.notice_once "DEPRECATION NOTICE: Files found in modules without specifying 'modules' in file path will be deprecated in the next major release.  Please fix module '#{mount_name}' when no 0.24.x clients are present"
-      return mounts["modules"]
-    end
-
     # This can be nil.
     mounts[mount_name]
   end
@@ -70,7 +54,8 @@ class Puppet::FileServing::Configuration
 
     mount_name, path = request.key.split(File::Separator, 2)
 
-    raise(ArgumentError, "Cannot find file: Invalid path '#{mount_name}'") unless mount_name =~ %r{^[-\w]+$}
+    raise(ArgumentError, "Cannot find file: Invalid mount '#{mount_name}'") unless mount_name =~ %r{^[-\w]+$}
+    raise(ArgumentError, "Cannot find file: Invalid relative path '#{path}'") if path and path.split('/').include?('..')
 
     return nil unless mount = find_mount(mount_name, request.environment)
     if mount.name == "modules" and mount_name != "modules"
@@ -116,8 +101,7 @@ class Puppet::FileServing::Configuration
       newmounts = @parser.parse
       @mounts = newmounts
     rescue => detail
-      puts detail.backtrace if Puppet[:trace]
-      Puppet.err "Error parsing fileserver configuration: #{detail}; using old configuration"
+      Puppet.log_exception(detail, "Error parsing fileserver configuration: #{detail}; using old configuration")
     end
 
   ensure

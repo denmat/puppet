@@ -1,9 +1,9 @@
-#!/usr/bin/env ruby
+#! /usr/bin/env ruby
 #
 # Unit testing for the macauthorization provider
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+require 'spec_helper'
 
 require 'puppet'
 require 'facter/util/plist'
@@ -106,6 +106,11 @@ describe provider_class do
     end
 
     it "should call the internal method set_right" do
+      @provider.expects(:execute).with { |cmds, args|
+        cmds.include?("read") and
+        cmds.include?(@authname) and
+        args[:combine] == false
+      }.once
       @provider.expects(:set_right)
       @provider.flush
     end

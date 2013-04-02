@@ -1,14 +1,17 @@
-#!/usr/bin/env ruby
+#! /usr/bin/env ruby
+require 'spec_helper'
 
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+describe "RDoc::Parser", :if => Puppet.features.rdoc1? do
+  before :all do
+    require 'puppet/resource/type_collection'
+    require 'puppet/util/rdoc/parser'
+    require 'puppet/util/rdoc/code_objects'
+    require 'rdoc/options'
+    require 'rdoc/rdoc'
+  end
 
-require 'puppet/resource/type_collection'
-require 'puppet/util/rdoc/parser'
-require 'puppet/util/rdoc/code_objects'
-require 'rdoc/options'
-require 'rdoc/rdoc'
+  include PuppetSpec::Files
 
-describe RDoc::Parser do
   before :each do
     File.stubs(:stat).with("init.pp")
     @top_level = stub_everything 'toplevel', :file_relative_name => "init.pp"
@@ -20,8 +23,9 @@ describe RDoc::Parser do
       @parser.stubs(:scan_top_level)
       parser = stub 'parser'
       Puppet::Parser::Parser.stubs(:new).returns(parser)
-      parser.expects(:parse).returns(Puppet::Parser::AST::Hostclass.new(''))
+      parser.expects(:parse).returns(Puppet::Parser::AST::Hostclass.new('')).at_least_once
       parser.expects(:file=).with("module/manifests/init.pp")
+      parser.expects(:file=).with(File.expand_path("/dev/null/manifests/site.pp"))
 
       @parser.scan
     end
@@ -29,7 +33,7 @@ describe RDoc::Parser do
     it "should scan the ast for Puppet files" do
       parser = stub_everything 'parser'
       Puppet::Parser::Parser.stubs(:new).returns(parser)
-      parser.expects(:parse).returns(Puppet::Parser::AST::Hostclass.new(''))
+      parser.expects(:parse).returns(Puppet::Parser::AST::Hostclass.new('')).at_least_once
 
       @parser.expects(:scan_top_level)
 
@@ -39,7 +43,7 @@ describe RDoc::Parser do
     it "should return a PuppetTopLevel to RDoc" do
       parser = stub_everything 'parser'
       Puppet::Parser::Parser.stubs(:new).returns(parser)
-      parser.expects(:parse).returns(Puppet::Parser::AST::Hostclass.new(''))
+      parser.expects(:parse).returns(Puppet::Parser::AST::Hostclass.new('')).at_least_once
 
       @parser.expects(:scan_top_level)
 
@@ -73,11 +77,35 @@ describe RDoc::Parser do
     end
 
     it "should read any present README as module documentation" do
-      FileTest.stubs(:readable?).returns(true)
+      FileTest.stubs(:readable?).with("module/README").returns(true)
+      FileTest.stubs(:readable?).with("module/README.rdoc").returns(false)
       File.stubs(:open).returns("readme")
       @parser.stubs(:parse_elements)
 
       @module.expects(:comment=).with("readme")
+
+      @parser.scan_top_level(@topcontainer)
+    end
+
+    it "should read any present README.rdoc as module documentation" do
+      FileTest.stubs(:readable?).with("module/README.rdoc").returns(true)
+      FileTest.stubs(:readable?).with("module/README").returns(false)
+      File.stubs(:open).returns("readme")
+      @parser.stubs(:parse_elements)
+
+      @module.expects(:comment=).with("readme")
+
+      @parser.scan_top_level(@topcontainer)
+    end
+
+    it "should prefer README.rdoc over README as module documentation" do
+      FileTest.stubs(:readable?).with("module/README.rdoc").returns(true)
+      FileTest.stubs(:readable?).with("module/README").returns(true)
+      File.stubs(:open).with("module/README", "r").returns("readme")
+      File.stubs(:open).with("module/README.rdoc", "r").returns("readme.rdoc")
+      @parser.stubs(:parse_elements)
+
+      @module.expects(:comment=).with("readme.rdoc")
 
       @parser.scan_top_level(@topcontainer)
     end
@@ -133,7 +161,7 @@ describe RDoc::Parser do
 
   describe "when finding modules from filepath" do
     before :each do
-      Puppet::Module.stubs(:modulepath).returns("/path/to/modules")
+      Puppet::Node::Environment.any_instance.stubs(:modulepath).returns("/path/to/modules")
     end
 
     it "should return the module name for modulized puppet manifests" do
@@ -146,6 +174,10 @@ describe RDoc::Parser do
       File.stubs(:expand_path).returns("/path/to/manifests/init.pp")
       File.stubs(:identical?).returns(false)
       @parser.split_module("/path/to/manifests/init.pp").should == RDoc::Parser::SITE
+    end
+
+    it "should handle windows paths with drive letters", :if => Puppet.features.microsoft_windows? do
+      @parser.split_module("C:/temp/init.pp").should == RDoc::Parser::SITE
     end
   end
 
@@ -294,7 +326,7 @@ describe RDoc::Parser do
     end
 
     it "should scan for resources if needed" do
-      Puppet.settings.stubs(:[]).with(:document_all).returns(true)
+      Puppet[:document_all] = true
       @parser.expects(:scan_for_resource).with(@rdoc_node, @code)
       @parser.document_node("mynode", @node, @class)
     end
@@ -338,7 +370,7 @@ describe RDoc::Parser do
     end
 
     it "should scan for resources if needed" do
-      Puppet.settings.stubs(:[]).with(:document_all).returns(true)
+      Puppet[:document_all] = true
       @parser.expects(:scan_for_resource).with(@rdoc_class, @code)
       @parser.document_class("mynode", @class, @module)
     end

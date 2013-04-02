@@ -2,10 +2,13 @@
 # to see here.
 
 require 'puppet/util/selinux'
+require 'tempfile'
 require 'fileutils'
 
 class Puppet::Util::FileType
   attr_accessor :loaded, :path, :synced
+
+  class FileReadError < Puppet::Error; end
 
   include Puppet::Util::SELinux
 
@@ -18,12 +21,10 @@ class Puppet::Util::FileType
   def self.newfiletype(name, &block)
     @filetypes ||= {}
 
-
-          klass = genclass(
-        name,
+    klass = genclass(
+      name,
       :block => block,
       :prefix => "FileType",
-        
       :hash => @filetypes
     )
 
@@ -44,8 +45,9 @@ class Puppet::Util::FileType
         rescue Puppet::Error => detail
           raise
         rescue => detail
-          puts detail.backtrace if Puppet[:trace]
-          raise Puppet::Error, "#{self.class} could not read #{@path}: #{detail}"
+          message = "#{self.class} could not read #{@path}: #{detail}"
+          Puppet.log_exception(detail, message)
+          raise Puppet::Error, message
         end
       end
 
@@ -59,8 +61,9 @@ class Puppet::Util::FileType
         rescue Puppet::Error => detail
           raise
         rescue => detail
-          puts detail.backtrace if Puppet[:debug]
-          raise Puppet::Error, "#{self.class} could not write #{@path}: #{detail}"
+          message = "#{self.class} could not write #{@path}: #{detail}"
+          Puppet.log_exception(detail, message)
+          raise Puppet::Error, message
         end
       end
     end
@@ -78,6 +81,17 @@ class Puppet::Util::FileType
   def initialize(path)
     raise ArgumentError.new("Path is nil") if path.nil?
     @path = path
+  end
+
+  # Arguments that will be passed to the execute method. Will set the uid
+  # to the target user if the target user and the current user are not
+  # the same
+  def cronargs
+    if uid = Puppet::Util.uid(@path) and uid == Puppet::Util::SUIDManager.uid
+      {:failonfail => true, :combine => true}
+    else
+      {:failonfail => true, :combine => true, :uid => @path}
+    end
   end
 
   # Operate on plain files.
@@ -103,7 +117,6 @@ class Puppet::Util::FileType
 
     # Overwrite the file.
     def write(text)
-      require "tempfile"
       tf = Tempfile.new("puppet")
       tf.print text; tf.flush
       FileUtils.cp(tf.path, @path)
@@ -155,7 +168,7 @@ class Puppet::Util::FileType
       begin
         @uid = Puppet::Util.uid(user)
       rescue Puppet::Error => detail
-        raise Puppet::Error, "Could not retrieve user #{user}"
+        raise FileReadError, "Could not retrieve user #{user}: #{detail}", detail.backtrace
       end
 
       # XXX We have to have the user name, not the uid, because some
@@ -170,7 +183,7 @@ class Puppet::Util::FileType
 
     # Remove a specific @path's cron tab.
     def remove
-      if %w{Darwin FreeBSD}.include?(Facter.value("operatingsystem"))
+      if %w{Darwin FreeBSD DragonFly}.include?(Facter.value("operatingsystem"))
         %x{/bin/echo yes | #{cmdbase} -r 2>/dev/null}
       else
         %x{#{cmdbase} -r 2>/dev/null}
@@ -204,40 +217,41 @@ class Puppet::Util::FileType
   newfiletype(:suntab) do
     # Read a specific @path's cron tab.
     def read
-        output = Puppet::Util.execute(%w{crontab -l}, :uid => @path)
-        return "" if output.include?("can't open your crontab")
-        raise Puppet::Error, "User #{@path} not authorized to use cron" if output.include?("you are not authorized to use cron")
-        return output
+      Puppet::Util::Execution.execute(%w{crontab -l}, cronargs)
     rescue => detail
-        raise Puppet::Error, "Could not read crontab for #{@path}: #{detail}"
+      case detail.to_s
+      when /can't open your crontab/
+        return ""
+      when /you are not authorized to use cron/
+        raise FileReadError, "User #{@path} not authorized to use cron", detail.backtrace
+      else
+        raise FileReadError, "Could not read crontab for #{@path}: #{detail}", detail.backtrace
+      end
     end
 
     # Remove a specific @path's cron tab.
     def remove
-        Puppet::Util.execute(%w{crontab -r}, :uid => @path)
+      Puppet::Util::Execution.execute(%w{crontab -r}, cronargs)
     rescue => detail
-        raise Puppet::Error, "Could not remove crontab for #{@path}: #{detail}"
+      raise FileReadError, "Could not remove crontab for #{@path}: #{detail}", detail.backtrace
     end
 
     # Overwrite a specific @path's cron tab; must be passed the @path name
     # and the text with which to create the cron tab.
     def write(text)
-      puts text
-      require "tempfile"
-      output_file = Tempfile.new("puppet")
-      fh = output_file.open
-      fh.print text
-      fh.close
-
-      # We have to chown the stupid file to the user.
-      File.chown(Puppet::Util.uid(@path), nil, output_file.path)
-
+      output_file = Tempfile.new("puppet_suntab")
       begin
-        Puppet::Util.execute(["crontab", output_file.path], :uid => @path)
+        output_file.print text
+        output_file.close
+        # We have to chown the stupid file to the user.
+        File.chown(Puppet::Util.uid(@path), nil, output_file.path)
+        Puppet::Util::Execution.execute(["crontab", output_file.path], cronargs)
       rescue => detail
-        raise Puppet::Error, "Could not write crontab for #{@path}: #{detail}"
+        raise FileReadError, "Could not write crontab for #{@path}: #{detail}", detail.backtrace
+      ensure
+        output_file.close
+        output_file.unlink
       end
-      output_file.delete
     end
   end
 
@@ -245,38 +259,41 @@ class Puppet::Util::FileType
   newfiletype(:aixtab) do
     # Read a specific @path's cron tab.
     def read
-        output = Puppet::Util.execute(%w{crontab -l}, :uid => @path)
-        raise Puppet::Error, "User #{@path} not authorized to use cron" if output.include?("You are not authorized to use the cron command")
-        return output
+      Puppet::Util::Execution.execute(%w{crontab -l}, cronargs)
     rescue => detail
-        raise Puppet::Error, "Could not read crontab for #{@path}: #{detail}"
+      case detail.to_s
+      when /Cannot open a file in the .* directory/
+        return ""
+      when /You are not authorized to use the cron command/
+        raise FileReadError, "User #{@path} not authorized to use cron", detail.backtrace
+      else
+        raise FileReadError, "Could not read crontab for #{@path}: #{detail}", detail.backtrace
+      end
     end
 
     # Remove a specific @path's cron tab.
     def remove
-        Puppet::Util.execute(%w{crontab -r}, :uid => @path)
+      Puppet::Util::Execution.execute(%w{crontab -r}, cronargs)
     rescue => detail
-        raise Puppet::Error, "Could not remove crontab for #{@path}: #{detail}"
+      raise FileReadError, "Could not remove crontab for #{@path}: #{detail}", detail.backtrace
     end
 
     # Overwrite a specific @path's cron tab; must be passed the @path name
     # and the text with which to create the cron tab.
     def write(text)
-      require "tempfile"
-      output_file = Tempfile.new("puppet")
-      fh = output_file.open
-      fh.print text
-      fh.close
-
-      # We have to chown the stupid file to the user.
-      File.chown(Puppet::Util.uid(@path), nil, output_file.path)
+      output_file = Tempfile.new("puppet_aixtab")
 
       begin
-        Puppet::Util.execute(["crontab", output_file.path], :uid => @path)
+        output_file.print text
+        output_file.close
+        # We have to chown the stupid file to the user.
+        File.chown(Puppet::Util.uid(@path), nil, output_file.path)
+        Puppet::Util::Execution.execute(["crontab", output_file.path], cronargs)
       rescue => detail
-        raise Puppet::Error, "Could not write crontab for #{@path}: #{detail}"
+        raise FileReadError, "Could not write crontab for #{@path}: #{detail}", detail.backtrace
       ensure
-        output_file.delete
+        output_file.close
+        output_file.unlink
       end
     end
   end

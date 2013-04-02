@@ -1,13 +1,11 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 require 'puppet/resource'
 
 describe Puppet::Resource do
+  include PuppetSpec::Files
 
-  before do
-    @basepath = Puppet.features.posix? ? "/somepath" : "C:/somepath"
-  end
+  let :basepath do make_absolute("/somepath") end
 
   [:catalog, :file, :line].each do |attr|
     it "should have an #{attr} attribute" do
@@ -22,7 +20,7 @@ describe Puppet::Resource do
   end
 
   it "should require the type and title" do
-    lambda { Puppet::Resource.new }.should raise_error(ArgumentError)
+    expect { Puppet::Resource.new }.to raise_error(ArgumentError)
   end
 
   it "should canonize types to capitalized strings" do
@@ -87,33 +85,28 @@ describe Puppet::Resource do
   end
 
   it "should be able to extract its information from a Puppet::Type instance" do
-    ral = Puppet::Type.type(:file).new :path => @basepath+"/foo"
+    ral = Puppet::Type.type(:file).new :path => basepath+"/foo"
     ref = Puppet::Resource.new(ral)
     ref.type.should == "File"
-    ref.title.should == @basepath+"/foo"
+    ref.title.should == basepath+"/foo"
   end
 
 
   it "should fail if the title is nil and the type is not a valid resource reference string" do
-    lambda { Puppet::Resource.new("foo") }.should raise_error(ArgumentError)
+    expect { Puppet::Resource.new("resource-spec-foo") }.to raise_error(ArgumentError)
   end
 
   it 'should fail if strict is set and type does not exist' do
-    lambda { Puppet::Resource.new('foo', 'title', {:strict=>true}) }.should raise_error(ArgumentError, 'Invalid resource type foo')
+    expect { Puppet::Resource.new('resource-spec-foo', 'title', {:strict=>true}) }.to raise_error(ArgumentError, 'Invalid resource type resource-spec-foo')
   end
 
   it 'should fail if strict is set and class does not exist' do
-    lambda { Puppet::Resource.new('Class', 'foo', {:strict=>true}) }.should raise_error(ArgumentError, 'Could not find declared class foo')
+    expect { Puppet::Resource.new('Class', 'resource-spec-foo', {:strict=>true}) }.to raise_error(ArgumentError, 'Could not find declared class resource-spec-foo')
   end
 
   it "should fail if the title is a hash and the type is not a valid resource reference string" do
-    lambda { Puppet::Resource.new({:type => "foo", :title => "bar"}) }.should raise_error(ArgumentError,
-      'Puppet::Resource.new does not take a hash as the first argument. Did you mean ("foo", "bar") ?'
-    )
-  end
-
-  it "should be able to produce a backward-compatible reference array" do
-    Puppet::Resource.new("foobar", "/f").to_trans_ref.should == %w{Foobar /f}
+    expect { Puppet::Resource.new({:type => "resource-spec-foo", :title => "bar"}) }.
+      to raise_error ArgumentError, /Puppet::Resource.new does not take a hash/
   end
 
   it "should be taggable" do
@@ -273,6 +266,136 @@ describe Puppet::Resource do
     Puppet::Resource.new("file", "/foo").should_not == Puppet::Resource.new("file", "/f")
   end
 
+  describe "when setting default parameters" do
+    before do
+      @scope = mock "Scope"
+      @scope.stubs(:source).returns(nil)
+    end
+
+    it "should fail when asked to set default values and it is not a parser resource" do
+      Puppet::Node::Environment.new.known_resource_types.add(
+        Puppet::Resource::Type.new(:definition, "default_param", :arguments => {"a" => Puppet::Parser::AST::String.new(:value => "default")})
+      )
+      resource = Puppet::Resource.new("default_param", "name")
+      lambda { resource.set_default_parameters(@scope) }.should raise_error(Puppet::DevError)
+    end
+
+    it "should evaluate and set any default values when no value is provided" do
+      Puppet::Node::Environment.new.known_resource_types.add(
+        Puppet::Resource::Type.new(:definition, "default_param", :arguments => {"a" => Puppet::Parser::AST::String.new(:value => "a_default_value")})
+      )
+      resource = Puppet::Parser::Resource.new("default_param", "name", :scope => Puppet::Parser::Scope.new(Puppet::Parser::Compiler.new(Puppet::Node.new("foo"))))
+      resource.set_default_parameters(@scope)
+      resource["a"].should == "a_default_value"
+    end
+
+    it "should skip attributes with no default value" do
+      Puppet::Node::Environment.new.known_resource_types.add(
+        Puppet::Resource::Type.new(:definition, "no_default_param", :arguments => {"a" => Puppet::Parser::AST::String.new(:value => "a_default_value")})
+      )
+      resource = Puppet::Parser::Resource.new("no_default_param", "name", :scope => Puppet::Parser::Scope.new(Puppet::Parser::Compiler.new(Puppet::Node.new("foo"))))
+      lambda { resource.set_default_parameters(@scope) }.should_not raise_error
+    end
+
+    it "should return the list of default parameters set" do
+      Puppet::Node::Environment.new.known_resource_types.add(
+        Puppet::Resource::Type.new(:definition, "default_param", :arguments => {"a" => Puppet::Parser::AST::String.new(:value => "a_default_value")})
+      )
+      resource = Puppet::Parser::Resource.new("default_param", "name", :scope => Puppet::Parser::Scope.new(Puppet::Parser::Compiler.new(Puppet::Node.new("foo"))))
+      resource.set_default_parameters(@scope).should == ["a"]
+    end
+
+    describe "when the resource type is :hostclass" do
+      let(:environment_name) { "testing env" }
+      let(:fact_values) { { :a => 1 } }
+      let(:port) { Puppet::Parser::AST::String.new(:value => '80') }
+      let(:apache) { Puppet::Resource::Type.new(:hostclass, 'apache', :arguments => { 'port' => port }) }
+
+      before do
+        environment = Puppet::Node::Environment.new(environment_name)
+        environment.known_resource_types.add(apache)
+
+        @scope.stubs(:host).returns('host')
+        @scope.stubs(:environment).returns(Puppet::Node::Environment.new(environment_name))
+        @scope.stubs(:facts).returns(Puppet::Node::Facts.new("facts", fact_values))
+      end
+
+      context "when no value is provided" do
+        let(:resource) do
+          Puppet::Parser::Resource.new("class", "apache", :scope => @scope)
+        end
+
+        it "should query the data_binding terminus using a namespaced key" do
+          Puppet::DataBinding.indirection.expects(:find).with(
+            'apache::port', all_of(has_key(:environment), has_key(:variables)))
+          resource.set_default_parameters(@scope)
+        end
+
+        it "should use the value from the data_binding terminus" do
+          Puppet::DataBinding.indirection.expects(:find).returns('443')
+
+          resource.set_default_parameters(@scope)
+
+          resource[:port].should == '443'
+        end
+
+        it "should use the default value if the data_binding terminus returns nil" do
+          Puppet::DataBinding.indirection.expects(:find).returns(nil)
+
+          resource.set_default_parameters(@scope)
+
+          resource[:port].should == '80'
+        end
+      end
+
+      context "when a value is provided" do
+        let(:port_parameter) do
+          Puppet::Parser::Resource::Param.new(
+            { :name => 'port', :value => '8080' }
+          )
+        end
+
+        let(:resource) do
+          Puppet::Parser::Resource.new("class", "apache", :scope => @scope,
+            :parameters => [port_parameter])
+        end
+
+        it "should not query the data_binding terminus" do
+          Puppet::DataBinding.indirection.expects(:find).never
+          resource.set_default_parameters(@scope)
+        end
+
+        it "should use the value provided" do
+          Puppet::DataBinding.indirection.expects(:find).never
+          resource.set_default_parameters(@scope).should == []
+          resource[:port].should == '8080'
+        end
+      end
+    end
+  end
+
+  describe "when validating all required parameters are present" do
+    it "should be able to validate that all required parameters are present" do
+      Puppet::Node::Environment.new.known_resource_types.add(
+        Puppet::Resource::Type.new(:definition, "required_param", :arguments => {"a" => nil})
+      )
+      lambda { Puppet::Resource.new("required_param", "name").validate_complete }.should raise_error(Puppet::ParseError)
+    end
+
+    it "should not fail when all required parameters are present" do
+      Puppet::Node::Environment.new.known_resource_types.add(
+        Puppet::Resource::Type.new(:definition, "no_required_param")
+      )
+      resource = Puppet::Resource.new("no_required_param", "name")
+      resource["a"] = "meh"
+      lambda { resource.validate_complete }.should_not raise_error
+    end
+
+    it "should not validate against builtin types" do
+      lambda { Puppet::Resource.new("file", "/bar").validate_complete }.should_not raise_error
+    end
+  end
+
   describe "when referring to a resource with name canonicalization" do
     it "should canonicalize its own name" do
       res = Puppet::Resource.new("file", "/path/")
@@ -287,11 +410,11 @@ describe Puppet::Resource do
     end
 
     it "should fail if invalid parameters are used" do
-      lambda { Puppet::Resource.new("file", "/path", :strict => true, :parameters => {:nosuchparam => "bar"}) }.should raise_error
+      expect { Puppet::Resource.new("file", "/path", :strict => true, :parameters => {:nosuchparam => "bar"}) }.to raise_error
     end
 
     it "should fail if the resource type cannot be resolved" do
-      lambda { Puppet::Resource.new("nosuchtype", "/path", :strict => true) }.should raise_error
+      expect { Puppet::Resource.new("nosuchtype", "/path", :strict => true) }.to raise_error
     end
   end
 
@@ -356,7 +479,7 @@ describe Puppet::Resource do
     it "should be able to set the name for non-builtin types" do
       resource = Puppet::Resource.new(:foo, "bar")
       resource[:name] = "eh"
-      lambda { resource[:name] = "eh" }.should_not raise_error
+      expect { resource[:name] = "eh" }.to_not raise_error
     end
 
     it "should be able to return the name for non-builtin types" do
@@ -448,7 +571,7 @@ describe Puppet::Resource do
     end
 
     it "should be able to be dumped to yaml" do
-      proc { YAML.dump(@resource) }.should_not raise_error
+      expect { YAML.dump(@resource) }.to_not raise_error
     end
 
     it "should produce an equivalent yaml object" do
@@ -473,7 +596,7 @@ type: File
     end
 
     it "should deserialize a Puppet::Resource::Reference without exceptions" do
-      lambda { YAML.load(@old_storedconfig_yaml) }.should_not raise_error
+      expect { YAML.load(@old_storedconfig_yaml) }.to_not raise_error
     end
 
     it "should deserialize as a Puppet::Resource::Reference as a Puppet::Resource" do
@@ -487,23 +610,19 @@ type: File
 
   describe "when converting to a RAL resource" do
     it "should use the resource type's :new method to create the resource if the resource is of a builtin type" do
-      resource = Puppet::Resource.new("file", @basepath+"/my/file")
+      resource = Puppet::Resource.new("file", basepath+"/my/file")
       result = resource.to_ral
-      result.should be_instance_of(Puppet::Type.type(:file))
-      result[:path].should == @basepath+"/my/file"
+      result.must be_instance_of(Puppet::Type.type(:file))
+      result[:path].should == basepath+"/my/file"
     end
 
     it "should convert to a component instance if the resource type is not of a builtin type" do
       resource = Puppet::Resource.new("foobar", "somename")
       result = resource.to_ral
 
-      result.should be_instance_of(Puppet::Type.type(:component))
+      result.must be_instance_of(Puppet::Type.type(:component))
       result.title.should == "Foobar[somename]"
     end
-  end
-
-  it "should be able to convert itself to Puppet code" do
-    Puppet::Resource.new("one::two", "/my/file").should respond_to(:to_manifest)
   end
 
   describe "when converting to puppet code" do
@@ -528,98 +647,7 @@ type: File
     end
   end
 
-  it "should be able to convert itself to a TransObject instance" do
-    Puppet::Resource.new("one::two", "/my/file").should respond_to(:to_trans)
-  end
-
-  describe "when converting to a TransObject" do
-    describe "and the resource is not an instance of a builtin type" do
-      before do
-        @resource = Puppet::Resource.new("foo", "bar")
-      end
-
-      it "should return a simple TransBucket if it is not an instance of a builtin type" do
-        bucket = @resource.to_trans
-        bucket.should be_instance_of(Puppet::TransBucket)
-        bucket.type.should == @resource.type
-        bucket.name.should == @resource.title
-      end
-
-      it "should return a simple TransBucket if it is a stage" do
-        @resource = Puppet::Resource.new("stage", "bar")
-        bucket = @resource.to_trans
-        bucket.should be_instance_of(Puppet::TransBucket)
-        bucket.type.should == @resource.type
-        bucket.name.should == @resource.title
-      end
-
-      it "should copy over the resource's file" do
-        @resource.file = "/foo/bar"
-        @resource.to_trans.file.should == "/foo/bar"
-      end
-
-      it "should copy over the resource's line" do
-        @resource.line = 50
-        @resource.to_trans.line.should == 50
-      end
-    end
-
-    describe "and the resource is an instance of a builtin type" do
-      before do
-        @resource = Puppet::Resource.new("file", "bar")
-      end
-
-      it "should return a TransObject if it is an instance of a builtin resource type" do
-        trans = @resource.to_trans
-        trans.should be_instance_of(Puppet::TransObject)
-        trans.type.should == "file"
-        trans.name.should == @resource.title
-      end
-
-      it "should copy over the resource's file" do
-        @resource.file = "/foo/bar"
-        @resource.to_trans.file.should == "/foo/bar"
-      end
-
-      it "should copy over the resource's line" do
-        @resource.line = 50
-        @resource.to_trans.line.should == 50
-      end
-
-      # Only TransObjects support tags, annoyingly
-      it "should copy over the resource's tags" do
-        @resource.tag "foo"
-        @resource.to_trans.tags.should == @resource.tags
-      end
-
-      it "should copy the resource's parameters into the transobject and convert the parameter name to a string" do
-        @resource[:foo] = "bar"
-        @resource.to_trans["foo"].should == "bar"
-      end
-
-      it "should be able to copy arrays of values" do
-        @resource[:foo] = %w{yay fee}
-        @resource.to_trans["foo"].should == %w{yay fee}
-      end
-
-      it "should reduce single-value arrays to just a value" do
-        @resource[:foo] = %w{yay}
-        @resource.to_trans["foo"].should == "yay"
-      end
-
-      it "should convert resource references into the backward-compatible form" do
-        @resource[:foo] = Puppet::Resource.new(:file, "/f")
-        @resource.to_trans["foo"].should == %w{File /f}
-      end
-
-      it "should convert resource references into the backward-compatible form even when within arrays" do
-        @resource[:foo] = ["a", Puppet::Resource.new(:file, "/f")]
-        @resource.to_trans["foo"].should == ["a", %w{File /f}]
-      end
-    end
-  end
-
-  describe "when converting to pson", :if => Puppet.features.pson? do
+  describe "when converting to pson" do
     def pson_output_should
       @resource.class.expects(:pson_create).with { |hash| yield hash }
     end
@@ -698,7 +726,7 @@ type: File
     end
   end
 
-  describe "when converting from pson", :if => Puppet.features.pson? do
+  describe "when converting from pson" do
     def pson_result_should
       Puppet::Resource.expects(:new).with { |hash| yield hash }
     end
@@ -706,7 +734,7 @@ type: File
     before do
       @data = {
         'type' => "file",
-        'title' => @basepath+"/yay",
+        'title' => basepath+"/yay",
       }
     end
 
@@ -715,7 +743,7 @@ type: File
     end
 
     it "should set its title to the provided title" do
-      Puppet::Resource.from_pson(@data).title.should == @basepath+"/yay"
+      Puppet::Resource.from_pson(@data).title.should == basepath+"/yay"
     end
 
     it "should tag the resource with any provided tags" do
@@ -746,12 +774,12 @@ type: File
 
     it "should fail if no title is provided" do
       @data.delete('title')
-      lambda { Puppet::Resource.from_pson(@data) }.should raise_error(ArgumentError)
+      expect { Puppet::Resource.from_pson(@data) }.to raise_error(ArgumentError)
     end
 
     it "should fail if no type is provided" do
       @data.delete('type')
-      lambda { Puppet::Resource.from_pson(@data) }.should raise_error(ArgumentError)
+      expect { Puppet::Resource.from_pson(@data) }.to raise_error(ArgumentError)
     end
 
     it "should set each of the provided parameters" do
@@ -779,7 +807,7 @@ type: File
     end
 
     it "should have a default terminus" do
-      Puppet::Resource.indirection.terminus_class.should == :ral
+      Puppet::Resource.indirection.terminus_class.should be
     end
 
     it "should have a name" do
@@ -807,6 +835,134 @@ type: File
       )
       res = Puppet::Resource.new("file", "/my/file", :parameters => {:owner => 'root', :content => 'hello'})
       res.uniqueness_key.should == [ nil, 'root', '/my/file']
+    end
+  end
+
+  describe '#parse_title' do
+    describe 'with a composite namevar' do
+      before do
+        Puppet::Type.newtype(:composite) do
+
+          newparam(:name)
+          newparam(:value)
+
+          # Configure two title patterns to match a title that is either
+          # separated with a colon or exclamation point. The first capture
+          # will be used for the :name param, and the second capture will be
+          # used for the :value param.
+          def self.title_patterns
+            identity = lambda {|x| x }
+            reverse  = lambda {|x| x.reverse }
+            [
+              [
+                /^(.*?):(.*?)$/,
+                [
+                  [:name, identity],
+                  [:value, identity],
+                ]
+              ],
+              [
+                /^(.*?)!(.*?)$/,
+                [
+                  [:name, reverse],
+                  [:value, reverse],
+                ]
+              ],
+            ]
+          end
+        end
+      end
+
+      describe "with no matching title patterns" do
+        subject { Puppet::Resource.new(:composite, 'unmatching title')}
+
+        it "should raise an exception if no title patterns match" do
+          expect do
+            subject.to_hash
+          end.to raise_error(Puppet::Error, /No set of title patterns matched/)
+        end
+      end
+
+      describe "with a matching title pattern" do
+        subject { Puppet::Resource.new(:composite, 'matching:title') }
+
+        it "should not raise an exception if there was a match" do
+          expect do
+            subject.to_hash
+          end.to_not raise_error
+        end
+
+        it "should set the resource parameters from the parsed title values" do
+          h = subject.to_hash
+          h[:name].should == 'matching'
+          h[:value].should == 'title'
+        end
+      end
+
+      describe "and multiple title patterns" do
+        subject { Puppet::Resource.new(:composite, 'matching!title') }
+
+        it "should use the first title pattern that matches" do
+          h = subject.to_hash
+          h[:name].should == 'gnihctam'
+          h[:value].should == 'eltit'
+        end
+      end
+    end
+  end
+
+  describe "#prune_parameters" do
+    before do
+      Puppet.newtype('blond') do
+        newproperty(:ensure)
+        newproperty(:height)
+        newproperty(:weight)
+        newproperty(:sign)
+        newproperty(:friends)
+        newparam(:admits_to_dying_hair)
+        newparam(:admits_to_age)
+        newparam(:name)
+      end
+    end
+
+    it "should strip all parameters and strip properties that are nil, empty or absent except for ensure" do
+      resource = Puppet::Resource.new("blond", "Bambi", :parameters => {
+        :ensure               => 'absent',
+        :height               => '',
+        :weight               => 'absent',
+        :friends              => [],
+        :admits_to_age        => true,
+        :admits_to_dying_hair => false
+      })
+
+      pruned_resource = resource.prune_parameters
+      pruned_resource.should == Puppet::Resource.new("blond", "Bambi", :parameters => {:ensure => 'absent'})
+    end
+
+    it "should leave parameters alone if in parameters_to_include" do
+      resource = Puppet::Resource.new("blond", "Bambi", :parameters => {
+        :admits_to_age        => true,
+        :admits_to_dying_hair => false
+      })
+
+      pruned_resource = resource.prune_parameters(:parameters_to_include => [:admits_to_dying_hair])
+      pruned_resource.should == Puppet::Resource.new("blond", "Bambi", :parameters => {:admits_to_dying_hair => false})
+    end
+
+    it "should leave properties if not nil, absent or empty" do
+      resource = Puppet::Resource.new("blond", "Bambi", :parameters => {
+        :ensure          => 'silly',
+        :height          => '7 ft 5 in',
+        :friends         => ['Oprah'],
+      })
+
+      pruned_resource = resource.prune_parameters
+      pruned_resource.should ==
+      resource = Puppet::Resource.new("blond", "Bambi", :parameters => {
+        :ensure          => 'silly',
+        :height          => '7 ft 5 in',
+        :friends         => ['Oprah'],
+      })
     end
   end
 end

@@ -10,16 +10,10 @@ class Puppet::SSL::Certificate < Puppet::SSL::Base
   wraps OpenSSL::X509::Certificate
 
   extend Puppet::Indirector
-  indirects :certificate, :terminus_class => :file
-
-  # Convert a string into an instance.
-  def self.from_s(string)
-    instance = wrapped_class.new(string)
-    name = instance.subject.to_s.sub(/\/CN=/i, '').downcase
-    result = new(name)
-    result.content = instance
-    result
-  end
+  indirects :certificate, :terminus_class => :file, :doc => <<DOC
+    This indirection wraps an `OpenSSL::X509::Certificate` object, representing a certificate (signed public key).
+    The indirection key is the certificate CN (generally a hostname).
+DOC
 
   # Because of how the format handler class is included, this
   # can't be in the base class.
@@ -27,8 +21,27 @@ class Puppet::SSL::Certificate < Puppet::SSL::Base
     [:s]
   end
 
+  def subject_alt_names
+    alts = content.extensions.find{|ext| ext.oid == "subjectAltName"}
+    return [] unless alts
+    alts.value.split(/\s*,\s*/)
+  end
+
   def expiration
     return nil unless content
     content.not_after
+  end
+
+  def near_expiration?(interval = nil)
+    return false unless expiration
+    interval ||= Puppet[:certificate_expire_warning]
+    # Certificate expiration timestamps are always in UTC
+    expiration < Time.now.utc + interval
+  end
+
+  # This name is what gets extracted from the subject before being passed
+  # to the constructor, so it's not downcased
+  def unmunged_name
+    self.class.name_from_subject(content.subject)
   end
 end

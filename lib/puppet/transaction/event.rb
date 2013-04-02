@@ -1,14 +1,16 @@
 require 'puppet/transaction'
 require 'puppet/util/tagging'
 require 'puppet/util/logging'
+require 'puppet/util/methodhelper'
 
 # A simple struct for storing what happens on the system.
 class Puppet::Transaction::Event
+  include Puppet::Util::MethodHelper
   include Puppet::Util::Tagging
   include Puppet::Util::Logging
 
-  ATTRIBUTES = [:name, :resource, :property, :previous_value, :desired_value, :historical_value, :status, :message, :file, :line, :source_description, :audited]
-  YAML_ATTRIBUTES = %w{@audited @property @previous_value @desired_value @historical_value @message @name @status @time}
+  ATTRIBUTES = [:name, :resource, :property, :previous_value, :desired_value, :historical_value, :status, :message, :file, :line, :source_description, :audited, :invalidate_refreshes]
+  YAML_ATTRIBUTES = %w{@audited @property @previous_value @desired_value @historical_value @message @name @status @time}.map(&:to_sym)
   attr_accessor *ATTRIBUTES
   attr_writer :tags
   attr_accessor :time
@@ -18,8 +20,7 @@ class Puppet::Transaction::Event
 
   def initialize(options = {})
     @audited = false
-    options.each { |attr, value| send(attr.to_s + "=", value) }
-
+    set_options(options)
     @time = Time.now
   end
 
@@ -48,7 +49,7 @@ class Puppet::Transaction::Event
   end
 
   def to_yaml_properties
-    (YAML_ATTRIBUTES & instance_variables).sort
+    YAML_ATTRIBUTES & instance_variables
   end
 
   private

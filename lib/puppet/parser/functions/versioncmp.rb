@@ -1,22 +1,19 @@
 require 'puppet/util/package'
 
-
-      Puppet::Parser::Functions::newfunction(
-        :versioncmp, :type => :rvalue,
-
-  :doc => "Compares two versions
+Puppet::Parser::Functions::newfunction( :versioncmp, :type => :rvalue, :arity => 2, :doc =>
+"Compares two version numbers.
 
 Prototype:
 
     \$result = versioncmp(a, b)
 
-Where a and b are arbitrary version strings
+Where a and b are arbitrary version strings.
 
-This functions returns a number:
+This function returns:
 
-* Greater than 0 if version a is greater than version b
-* Equal to 0 if both version are equals
-* Less than 0 if version a is less than version b
+* `1` if version a is greater than version b
+* `0` if the versions are equal
+* `-1` if version a is less than version b
 
 Example:
 
@@ -24,11 +21,10 @@ Example:
         notice('2.6-1 is > than 2.4.5')
     }
 
-") do |args|
+This function uses the same version comparison algorithm used by Puppet's
+`package` type.
 
-  unless args.length == 2
-    raise Puppet::ParseError, "versioncmp should have 2 arguments"
-  end
+") do |args|
 
   return Puppet::Util::Package.versioncmp(args[0], args[1])
 end

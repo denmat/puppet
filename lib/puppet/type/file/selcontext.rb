@@ -19,6 +19,7 @@
 #
 # See http://www.nsa.gov/selinux/ for complete docs on SELinux.
 
+
 module Puppet
   require 'puppet/util/selinux'
 
@@ -26,7 +27,7 @@ module Puppet
     include Puppet::Util::SELinux
 
     def retrieve
-      return :absent unless @resource.stat(false)
+      return :absent unless @resource.stat
       context = self.get_selinux_current_context(@resource[:path])
       parse_selinux_context(name, context)
     end
@@ -48,9 +49,13 @@ module Puppet
     def insync?(value)
       if not selinux_support?
         debug("SELinux bindings not found. Ignoring parameter.")
-        return true
+        true
+      elsif not selinux_label_support?(@resource[:path])
+        debug("SELinux not available for this filesystem. Ignoring parameter.")
+        true
+      else
+        super
       end
-      super
     end
 
     def sync

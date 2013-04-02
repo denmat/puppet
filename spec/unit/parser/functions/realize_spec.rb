@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe "the realize function" do
   before :all do
@@ -9,10 +8,10 @@ describe "the realize function" do
 
   before :each do
     @collector = stub_everything 'collector'
-    @scope = Puppet::Parser::Scope.new
-    @compiler = stub 'compiler'
+    node      = Puppet::Node.new('localhost')
+    @compiler = Puppet::Parser::Compiler.new(node)
+    @scope    = Puppet::Parser::Scope.new(@compiler)
     @compiler.stubs(:add_collection).with(@collector)
-    @scope.stubs(:compiler).returns(@compiler)
   end
 
   it "should exist" do
@@ -23,7 +22,7 @@ describe "the realize function" do
 
     Puppet::Parser::Collector.expects(:new).returns(@collector)
 
-    @scope.function_realize("test")
+    @scope.function_realize(["test"])
   end
 
   it "should assign the passed-in resources to the collector" do
@@ -31,7 +30,7 @@ describe "the realize function" do
 
     @collector.expects(:resources=).with(["test"])
 
-    @scope.function_realize("test")
+    @scope.function_realize(["test"])
   end
 
   it "should flatten the resources assigned to the collector" do
@@ -48,7 +47,7 @@ describe "the realize function" do
 
     @compiler.expects(:add_collection).with(@collector)
 
-    @scope.function_realize("test")
+    @scope.function_realize(["test"])
   end
 
 end

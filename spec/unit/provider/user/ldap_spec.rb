@@ -1,9 +1,5 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2008-3-10.
-#  Copyright (c) 2006. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 provider_class = Puppet::Type.type(:user).provider(:ldap)
 
@@ -28,14 +24,6 @@ describe provider_class do
     provider_class.should be_manages_passwords
   end
 
-  it "should use the ldap group provider to convert group names to numbers" do
-    provider = provider_class.new(:name => "foo")
-    Puppet::Type.type(:group).provider(:ldap).expects(:name2id).with("bar").returns 10
-
-    provider.gid = 'bar'
-    provider.gid.should == 10
-  end
-
   {:name => "uid",
     :password => "userPassword",
     :comment => "cn",
@@ -57,10 +45,13 @@ describe provider_class do
     end
 
     it "should generate the sn as the last field of the cn" do
+      Puppet::Type.type(:group).provider(:ldap).expects(:name2id).with(["whatever"]).returns [123]
+
       resource = stub 'resource', :should => %w{whatever}
       resource.stubs(:should).with(:comment).returns ["Luke Kanies"]
       resource.stubs(:should).with(:ensure).returns :present
       instance = provider_class.new(:name => "luke", :ensure => :absent)
+
       instance.stubs(:resource).returns resource
 
       @connection.expects(:add).with { |dn, attrs| attrs["sn"] == ["Kanies"] }
@@ -69,8 +60,25 @@ describe provider_class do
       instance.flush
     end
 
+    it "should translate a group name to the numeric id" do
+      Puppet::Type.type(:group).provider(:ldap).expects(:name2id).with("bar").returns 101
+
+      resource = stub 'resource', :should => %w{whatever}
+      resource.stubs(:should).with(:gid).returns 'bar'
+      resource.stubs(:should).with(:ensure).returns :present
+      instance = provider_class.new(:name => "luke", :ensure => :absent)
+      instance.stubs(:resource).returns resource
+
+      @connection.expects(:add).with { |dn, attrs| attrs["gidNumber"] == ["101"] }
+
+      instance.create
+      instance.flush
+    end
+
     describe "with no uid specified" do
       it "should pick the first available UID after the largest existing UID" do
+        Puppet::Type.type(:group).provider(:ldap).expects(:name2id).with(["whatever"]).returns [123]
+
         low = {:name=>["luke"], :shell=>:absent, :uid=>["600"], :home=>["/h"], :gid=>["1000"], :password=>["blah"], :comment=>["l k"]}
         high = {:name=>["testing"], :shell=>:absent, :uid=>["640"], :home=>["/h"], :gid=>["1000"], :password=>["blah"], :comment=>["t u"]}
         provider_class.manager.expects(:search).returns([low, high])
@@ -88,6 +96,8 @@ describe provider_class do
       end
 
       it "should pick 501 of no users exist" do
+        Puppet::Type.type(:group).provider(:ldap).expects(:name2id).with(["whatever"]).returns [123]
+
         provider_class.manager.expects(:search).returns nil
 
         resource = stub 'resource', :should => %w{whatever}

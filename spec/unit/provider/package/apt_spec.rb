@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 provider = Puppet::Type.type(:package).provider(:apt)
 
@@ -76,8 +75,6 @@ Version table:
 
     @provider.run_preseed
   end
-
-  it "should fail if a cdrom is listed in the sources list and :allowcdrom is not specified"
 
   describe "when installing" do
     it "should preseed if a responsefile is provided" do

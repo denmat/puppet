@@ -1,9 +1,5 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2008-3-7.
-#  Copyright (c) 2007. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/indirector/certificate_request/file'
 
@@ -13,7 +9,7 @@ describe Puppet::SSL::CertificateRequest::File do
   end
 
   it "should use the :requestdir as the collection directory" do
-    Puppet.settings.expects(:value).with(:requestdir).returns "/request/dir"
-    Puppet::SSL::CertificateRequest::File.collection_directory.should == "/request/dir"
+    Puppet[:requestdir] = File.expand_path("/request/dir")
+    Puppet::SSL::CertificateRequest::File.collection_directory.should == Puppet[:requestdir]
   end
 end

@@ -1,19 +1,37 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
+require 'puppet_spec/compiler'
 
 describe Puppet::Parser::Scope do
   before :each do
-    @topscope = Puppet::Parser::Scope.new
-    # This is necessary so we don't try to use the compiler to discover our parent.
-    @topscope.parent = nil
-    @scope = Puppet::Parser::Scope.new
-    @scope.compiler = Puppet::Parser::Compiler.new(Puppet::Node.new("foo"))
+    @scope = Puppet::Parser::Scope.new(
+      Puppet::Parser::Compiler.new(Puppet::Node.new("foo"))
+    )
+    @scope.source = Puppet::Resource::Type.new(:node, :foo)
+    @topscope = @scope.compiler.topscope
     @scope.parent = @topscope
   end
 
-  it "should be able to store references to class scopes" do
-    lambda { @scope.class_set "myname", "myscope" }.should_not raise_error
+  describe ".new_for_test_harness" do
+    let(:node_name) { "node_name_foo" }
+    let(:scope) { described_class.new_for_test_harness(node_name) }
+
+    it "should be a kind of Scope" do
+      scope.should be_a_kind_of Puppet::Parser::Scope
+    end
+    it "should set the source to a node resource" do
+      scope.source.should be_a_kind_of Puppet::Resource::Type
+    end
+    it "should have a compiler" do
+      scope.compiler.should be_a_kind_of Puppet::Parser::Compiler
+    end
+    it "should set the parent to the compiler topscope" do
+      scope.parent.should be scope.compiler.topscope
+    end
+  end
+
+  it "should return a scope for use in a test harness" do
+    described_class.new_for_test_harness("node_name_foo").should be_a_kind_of Puppet::Parser::Scope
   end
 
   it "should be able to retrieve class scopes by name" do
@@ -43,77 +61,150 @@ describe Puppet::Parser::Scope do
   end
 
   it "should get its environment from its compiler" do
-    env = stub 'environment'
-    compiler = stub 'compiler', :environment => env
-    scope = Puppet::Parser::Scope.new :compiler => compiler
+    env = Puppet::Node::Environment.new
+    compiler = stub 'compiler', :environment => env, :is_a? => true
+    scope = Puppet::Parser::Scope.new(compiler)
     scope.environment.should equal(env)
+  end
+
+  it "should fail if no compiler is supplied" do
+    expect {
+      Puppet::Parser::Scope.new
+    }.to raise_error(ArgumentError, /wrong number of arguments/)
+  end
+
+  it "should fail if something that isn't a compiler is supplied" do
+    expect {
+      Puppet::Parser::Scope.new(:compiler => true)
+    }.to raise_error(Puppet::DevError, /you must pass a compiler instance/)
   end
 
   it "should use the resource type collection helper to find its known resource types" do
     Puppet::Parser::Scope.ancestors.should include(Puppet::Resource::TypeCollectionHelper)
   end
 
+  describe "when custom functions are called" do
+    let(:env) { Puppet::Node::Environment.new('testing') }
+    let(:compiler) { Puppet::Parser::Compiler.new(Puppet::Node.new('foo', :environment => env)) }
+    let(:scope) { Puppet::Parser::Scope.new(compiler) }
+
+    it "calls methods prefixed with function_ as custom functions" do
+      scope.function_sprintf(["%b", 123]).should == "1111011"
+    end
+
+    it "raises an error when arguments are not passed in an Array" do
+      expect do
+        scope.function_sprintf("%b", 123)
+      end.to raise_error ArgumentError, /custom functions must be called with a single array that contains the arguments/
+    end
+
+    it "raises an error on subsequent calls when arguments are not passed in an Array" do
+      scope.function_sprintf(["first call"])
+
+      expect do
+        scope.function_sprintf("%b", 123)
+      end.to raise_error ArgumentError, /custom functions must be called with a single array that contains the arguments/
+    end
+
+    it "raises NoMethodError when the not prefixed" do
+      expect { scope.sprintf(["%b", 123]) }.to raise_error(NoMethodError)
+    end
+
+    it "raises NoMethodError when prefixed with function_ but it doesn't exist" do
+      expect { scope.function_fake_bs(['cows']) }.to raise_error(NoMethodError)
+    end
+  end
+
   describe "when initializing" do
     it "should extend itself with its environment's Functions module as well as the default" do
       env = Puppet::Node::Environment.new("myenv")
-      compiler = stub 'compiler', :environment => env
-      mod      = Module.new
-      root_mod = Module.new
-      Puppet::Parser::Functions.expects(:environment_module).with(Puppet::Node::Environment.root).returns root_mod
-      Puppet::Parser::Functions.expects(:environment_module).with(env).returns mod
+      root = Puppet::Node::Environment.root
+      compiler = stub 'compiler', :environment => env, :is_a? => true
 
-      Puppet::Parser::Scope.new(:compiler => compiler).singleton_class.ancestors.should be_include(mod)
+      scope = Puppet::Parser::Scope.new(compiler)
+      scope.singleton_class.ancestors.should be_include(Puppet::Parser::Functions.environment_module(env))
+      scope.singleton_class.ancestors.should be_include(Puppet::Parser::Functions.environment_module(root))
     end
 
-    it "should extend itself with the default Functions module if it has no environment" do
-      mod = Module.new
-      Puppet::Parser::Functions.expects(:environment_module).with(Puppet::Node::Environment.root).returns(mod)
-
-      Puppet::Parser::Functions.expects(:environment_module).with(nil).returns mod
-
-      Puppet::Parser::Scope.new.singleton_class.ancestors.should be_include(mod)
+    it "should extend itself with the default Functions module if its environment is the default" do
+      root     = Puppet::Node::Environment.root
+      node     = Puppet::Node.new('localhost')
+      compiler = Puppet::Parser::Compiler.new(node)
+      scope    = Puppet::Parser::Scope.new(compiler)
+      scope.singleton_class.ancestors.should be_include(Puppet::Parser::Functions.environment_module(root))
     end
   end
 
   describe "when looking up a variable" do
-    it "should default to an empty string" do
-      @scope.lookupvar("var").should == ""
-    end
-
-    it "should return an string when asked for a string" do
-      @scope.lookupvar("var", true).should == ""
-    end
-
-    it "should return ':undefined' for unset variables when asked not to return a string" do
-      @scope.lookupvar("var", false).should == :undefined
-    end
-
-    it "should be able to look up values" do
+    it "should support :lookupvar and :setvar for backward compatibility" do
       @scope.setvar("var", "yep")
       @scope.lookupvar("var").should == "yep"
     end
 
+    it "should fail if invoked with a non-string name" do
+      expect { @scope[:foo] }.to raise_error Puppet::DevError
+      expect { @scope[:foo] = 12 }.to raise_error Puppet::DevError
+    end
+
+    it "should return nil for unset variables" do
+      @scope["var"].should be_nil
+    end
+
+    it "should be able to look up values" do
+      @scope["var"] = "yep"
+      @scope["var"].should == "yep"
+    end
+
     it "should be able to look up hashes" do
-      @scope.setvar("var", {"a" => "b"})
-      @scope.lookupvar("var").should == {"a" => "b"}
+      @scope["var"] = {"a" => "b"}
+      @scope["var"].should == {"a" => "b"}
     end
 
     it "should be able to look up variables in parent scopes" do
-      @topscope.setvar("var", "parentval")
-      @scope.lookupvar("var").should == "parentval"
+      @topscope["var"] = "parentval"
+      @scope["var"].should == "parentval"
     end
 
     it "should prefer its own values to parent values" do
-      @topscope.setvar("var", "parentval")
-      @scope.setvar("var", "childval")
-      @scope.lookupvar("var").should == "childval"
+      @topscope["var"] = "parentval"
+      @scope["var"] = "childval"
+      @scope["var"].should == "childval"
+    end
+
+    it "should be able to detect when variables are set" do
+      @scope["var"] = "childval"
+      @scope.should be_include("var")
+    end
+
+    it "does not allow changing a set value" do
+      @scope["var"] = "childval"
+      expect {
+        @scope["var"] = "change"
+      }.to raise_error(Puppet::Error, "Cannot reassign variable var")
+    end
+
+    it "should be able to detect when variables are not set" do
+      @scope.should_not be_include("var")
+    end
+
+    it "should support iteration over its variables" do
+      @scope["one"] = "two"
+      @scope["three"] = "four"
+      hash = {}
+      @scope.each { |name, value| hash[name] = value }
+      hash.should == {"one" => "two", "three" => "four" }
+    end
+
+    it "should include Enumerable" do
+      @scope.singleton_class.ancestors.should be_include(Enumerable)
     end
 
     describe "and the variable is qualified" do
-      before do
-        @compiler = Puppet::Parser::Compiler.new(Puppet::Node.new("foonode"))
-        @scope.compiler = @compiler
+      before :each do
         @known_resource_types = @scope.known_resource_types
+
+        node      = Puppet::Node.new('localhost')
+        @compiler = Puppet::Parser::Compiler.new(node)
       end
 
       def newclass(name)
@@ -122,97 +213,115 @@ describe Puppet::Parser::Scope do
 
       def create_class_scope(name)
         klass = newclass(name)
-        Puppet::Parser::Resource.new("class", name, :scope => @scope, :source => mock('source')).evaluate
+
+        catalog = Puppet::Resource::Catalog.new
+        catalog.add_resource(Puppet::Parser::Resource.new("stage", :main, :scope => Puppet::Parser::Scope.new(@compiler)))
+
+        Puppet::Parser::Resource.new("class", name, :scope => @scope, :source => mock('source'), :catalog => catalog).evaluate
 
         @scope.class_scope(klass)
       end
 
       it "should be able to look up explicitly fully qualified variables from main" do
+        Puppet.expects(:deprecation_warning).never
         other_scope = create_class_scope("")
 
-        other_scope.setvar("othervar", "otherval")
+        other_scope["othervar"] = "otherval"
 
-        @scope.lookupvar("::othervar").should == "otherval"
+        @scope["::othervar"].should == "otherval"
       end
 
       it "should be able to look up explicitly fully qualified variables from other scopes" do
+        Puppet.expects(:deprecation_warning).never
         other_scope = create_class_scope("other")
 
-        other_scope.setvar("var", "otherval")
+        other_scope["var"] = "otherval"
 
-        @scope.lookupvar("::other::var").should == "otherval"
+        @scope["::other::var"].should == "otherval"
       end
 
       it "should be able to look up deeply qualified variables" do
+        Puppet.expects(:deprecation_warning).never
         other_scope = create_class_scope("other::deep::klass")
 
-        other_scope.setvar("var", "otherval")
+        other_scope["var"] = "otherval"
 
-        @scope.lookupvar("other::deep::klass::var").should == "otherval"
+        @scope["other::deep::klass::var"].should == "otherval"
       end
 
-      it "should return an empty string for qualified variables that cannot be found in other classes" do
+      it "should return nil for qualified variables that cannot be found in other classes" do
         other_scope = create_class_scope("other::deep::klass")
 
-        @scope.lookupvar("other::deep::klass::var").should == ""
+        @scope["other::deep::klass::var"].should be_nil
       end
 
-      it "should warn and return an empty string for qualified variables whose classes have not been evaluated" do
+      it "should warn and return nil for qualified variables whose classes have not been evaluated" do
         klass = newclass("other::deep::klass")
         @scope.expects(:warning)
-        @scope.lookupvar("other::deep::klass::var").should == ""
+        @scope["other::deep::klass::var"].should be_nil
       end
 
-      it "should warn and return an empty string for qualified variables whose classes do not exist" do
+      it "should warn and return nil for qualified variables whose classes do not exist" do
         @scope.expects(:warning)
-        @scope.lookupvar("other::deep::klass::var").should == ""
+        @scope["other::deep::klass::var"].should be_nil
       end
 
-      it "should return ':undefined' when asked for a non-string qualified variable from a class that does not exist" do
+      it "should return nil when asked for a non-string qualified variable from a class that does not exist" do
         @scope.stubs(:warning)
-        @scope.lookupvar("other::deep::klass::var", false).should == :undefined
+        @scope["other::deep::klass::var"].should be_nil
       end
 
-      it "should return ':undefined' when asked for a non-string qualified variable from a class that has not been evaluated" do
+      it "should return nil when asked for a non-string qualified variable from a class that has not been evaluated" do
         @scope.stubs(:warning)
         klass = newclass("other::deep::klass")
-        @scope.lookupvar("other::deep::klass::var", false).should == :undefined
+        @scope["other::deep::klass::var"].should be_nil
       end
     end
   end
 
-  describe "when setvar is called with append=true" do
+  describe "when variables are set with append=true" do
     it "should raise error if the variable is already defined in this scope" do
-      @scope.setvar("var","1", :append => false)
-      lambda { @scope.setvar("var","1", :append => true) }.should raise_error(Puppet::ParseError)
+      @scope.setvar("var", "1", :append => false)
+      expect {
+        @scope.setvar("var", "1", :append => true)
+      }.to raise_error(
+        Puppet::ParseError,
+        "Cannot append, variable var is defined in this scope"
+      )
     end
 
     it "should lookup current variable value" do
-      @scope.expects(:lookupvar).with("var").returns("2")
-      @scope.setvar("var","1", :append => true)
+      @scope.expects(:[]).with("var").returns("2")
+      @scope.setvar("var", "1", :append => true)
     end
 
     it "should store the concatenated string '42'" do
-      @topscope.setvar("var","4", :append => false)
-      @scope.setvar("var","2", :append => true)
-      @scope.lookupvar("var").should == "42"
+      @topscope.setvar("var", "4", :append => false)
+      @scope.setvar("var", "2", :append => true)
+      @scope["var"].should == "42"
     end
 
     it "should store the concatenated array [4,2]" do
-      @topscope.setvar("var",[4], :append => false)
-      @scope.setvar("var",[2], :append => true)
-      @scope.lookupvar("var").should == [4,2]
+      @topscope.setvar("var", [4], :append => false)
+      @scope.setvar("var", [2], :append => true)
+      @scope["var"].should == [4,2]
     end
 
     it "should store the merged hash {a => b, c => d}" do
-      @topscope.setvar("var",{"a" => "b"}, :append => false)
-      @scope.setvar("var",{"c" => "d"}, :append => true)
-      @scope.lookupvar("var").should == {"a" => "b", "c" => "d"}
+      @topscope.setvar("var", {"a" => "b"}, :append => false)
+      @scope.setvar("var", {"c" => "d"}, :append => true)
+      @scope["var"].should == {"a" => "b", "c" => "d"}
     end
 
     it "should raise an error when appending a hash with something other than another hash" do
-      @topscope.setvar("var",{"a" => "b"}, :append => false)
-      lambda { @scope.setvar("var","not a hash", :append => true) }.should raise_error
+      @topscope.setvar("var", {"a" => "b"}, :append => false)
+
+      expect {
+        @scope.setvar("var", "not a hash", :append => true)
+      }.to raise_error(
+        ArgumentError,
+        "Trying to append to a hash with something which is not a hash is unsupported"
+      )
     end
   end
 
@@ -282,7 +391,7 @@ describe Puppet::Parser::Scope do
     it "should store the variable value" do
       @scope.setvar("1", :value, :ephemeral => true)
 
-      @scope.lookupvar("1").should == :value
+      @scope["1"].should == :value
     end
 
     it "should remove the variable value when unset_ephemeral_var is called" do
@@ -291,22 +400,24 @@ describe Puppet::Parser::Scope do
 
       @scope.unset_ephemeral_var
 
-      @scope.lookupvar("1", false).should == :undefined
+      @scope["1"].should be_nil
     end
 
     it "should not remove classic variables when unset_ephemeral_var is called" do
-      @scope.setvar("myvar", :value1)
+      @scope['myvar'] = :value1
       @scope.setvar("1", :value2, :ephemeral => true)
       @scope.stubs(:parent).returns(nil)
 
       @scope.unset_ephemeral_var
 
-      @scope.lookupvar("myvar", false).should == :value1
+      @scope["myvar"].should == :value1
     end
 
     it "should raise an error when setting it again" do
       @scope.setvar("1", :value2, :ephemeral => true)
-      lambda { @scope.setvar("1", :value3, :ephemeral => true) }.should raise_error
+      expect {
+        @scope.setvar("1", :value3, :ephemeral => true)
+      }.to raise_error(Puppet::ParseError, /Cannot reassign variable 1/)
     end
 
     it "should declare ephemeral number only variable names" do
@@ -322,7 +433,7 @@ describe Puppet::Parser::Scope do
         @scope.setvar("0", :earliest, :ephemeral => true)
         @scope.new_ephemeral
         @scope.setvar("0", :latest, :ephemeral => true)
-        @scope.lookupvar("0", false).should == :latest
+        @scope["0"].should == :latest
       end
 
       it "should be able to report the current level" do
@@ -353,7 +464,7 @@ describe Puppet::Parser::Scope do
         @scope.setvar("1", :value1, :ephemeral => true)
         @scope.new_ephemeral
         @scope.setvar("0", :value2, :ephemeral => true)
-        @scope.lookupvar("1", false).should == :value1
+        @scope["1"].should == :value1
       end
 
       describe "when calling unset_ephemeral_var without a level" do
@@ -364,7 +475,7 @@ describe Puppet::Parser::Scope do
 
           @scope.unset_ephemeral_var
 
-          @scope.lookupvar("1", false).should == :undefined
+          @scope["1"].should be_nil
         end
       end
 
@@ -378,152 +489,9 @@ describe Puppet::Parser::Scope do
 
           @scope.unset_ephemeral_var(2)
 
-          @scope.lookupvar("1", false).should == :value2
+          @scope["1"].should == :value2
         end
       end
-    end
-  end
-
-  describe "when interpolating string" do
-    (0..9).each do |n|
-      it "should allow $#{n} to match" do
-        @scope.setvar(n.to_s, "value", :ephemeral => true)
-
-        @scope.strinterp("$#{n}").should == "value"
-      end
-    end
-
-    (0..9).each do |n|
-      it "should not allow $#{n} to match if not ephemeral" do
-        @scope.setvar(n.to_s, "value", :ephemeral => false)
-
-        @scope.strinterp("$#{n}").should_not == "value"
-      end
-    end
-
-    it "should not allow $10 to match" do
-      @scope.setvar("10", "value", :ephemeral => true)
-
-      @scope.strinterp('==$10==').should_not == "==value=="
-    end
-
-    it "should not allow ${10} to match" do
-      @scope.setvar("10", "value", :ephemeral => true)
-
-      @scope.strinterp('==${10}==').should == "==value=="
-    end
-
-    describe "with qualified variables" do
-      before do
-        @scopes = {}
-        klass = @scope.known_resource_types.add(Puppet::Resource::Type.new(:hostclass, ""))
-        Puppet::Parser::Resource.new("class", :main, :scope => @scope, :source => mock('source')).evaluate
-        @scopes[""] = @scope.class_scope(klass)
-        @scopes[""].setvar("test", "value")
-
-        %w{one one::two one::two::three}.each do |name|
-          klass = @scope.known_resource_types.add(Puppet::Resource::Type.new(:hostclass, name))
-          Puppet::Parser::Resource.new("class", name, :scope => @scope, :source => mock('source')).evaluate
-          @scopes[name] = @scope.class_scope(klass)
-          @scopes[name].setvar("test", "value-#{name.sub(/.+::/,'')}")
-        end
-      end
-      {
-        "===${one::two::three::test}===" => "===value-three===",
-        "===$one::two::three::test===" => "===value-three===",
-        "===${one::two::test}===" => "===value-two===",
-        "===$one::two::test===" => "===value-two===",
-        "===${one::test}===" => "===value-one===",
-        "===$one::test===" => "===value-one===",
-        "===${::test}===" => "===value===",
-        "===$::test===" => "===value==="
-      }.each do |input, output|
-        it "should parse '#{input}' correctly" do
-          @scope.strinterp(input).should == output
-        end
-      end
-    end
-
-    tests = {
-      "===${test}===" => "===value===",
-      "===${test} ${test} ${test}===" => "===value value value===",
-      "===$test ${test} $test===" => "===value value value===",
-      "===\\$test===" => "===$test===",
-      '===\\$test string===' => "===$test string===",
-      '===$test string===' => "===value string===",
-      '===a testing $===' => "===a testing $===",
-      '===a testing \$===' => "===a testing $===",
-      "===an escaped \\\n carriage return===" => "===an escaped  carriage return===",
-      '\$' => "$",
-      '\s' => "\s",
-      '\t' => "\t",
-      '\n' => "\n"
-    }
-
-    tests.each do |input, output|
-      it "should parse '#{input}' correctly" do
-        @scope.setvar("test", "value")
-        @scope.strinterp(input).should == output
-      end
-    end
-
-    # #523
-    %w{d f h l w z}.each do |l|
-      it "should parse '#{l}' when escaped" do
-        string = "\\#{l}"
-        @scope.strinterp(string).should == string
-      end
-    end
-  end
-
-  def test_strinterp
-    # Make and evaluate our classes so the qualified lookups work
-    parser = mkparser
-    klass = parser.newclass("")
-    scope = mkscope(:parser => parser)
-    Puppet::Parser::Resource.new(:type => "class", :title => :main, :scope => scope, :source => mock('source')).evaluate
-
-    assert_nothing_raised {
-      scope.setvar("test","value")
-    }
-
-    scopes = {"" => scope}
-
-    %w{one one::two one::two::three}.each do |name|
-      klass = parser.newclass(name)
-      Puppet::Parser::Resource.new(:type => "class", :title => name, :scope => scope, :source => mock('source')).evaluate
-      scopes[name] = scope.class_scope(klass)
-      scopes[name].setvar("test", "value-#{name.sub(/.+::/,'')}")
-    end
-
-    assert_equal("value", scope.lookupvar("::test"), "did not look up qualified value correctly")
-    tests.each do |input, output|
-      assert_nothing_raised("Failed to scan #{input.inspect}") do
-        assert_equal(output, scope.strinterp(input), 'did not parserret %s correctly' % input.inspect)
-      end
-    end
-
-    logs = []
-    Puppet::Util::Log.close
-    Puppet::Util::Log.newdestination(logs)
-
-    # #523
-    %w{d f h l w z}.each do |l|
-      string = "\\#{l}"
-      assert_nothing_raised do
-
-              assert_equal(
-        string, scope.strinterp(string),
-        
-          'did not parserret %s correctly' % string)
-      end
-
-
-            assert(
-        logs.detect { |m| m.message =~ /Unrecognised escape/ },
-        
-        "Did not get warning about escape sequence with #{string}")
-      logs.clear
     end
   end
 
@@ -536,7 +504,9 @@ describe Puppet::Parser::Scope do
     end
 
     it "should accept only MatchData" do
-      lambda { @scope.ephemeral_from("match") }.should raise_error
+      expect {
+        @scope.ephemeral_from("match")
+      }.to raise_error(ArgumentError, /Invalid regex match data/)
     end
 
     it "should set $0 with the full match" do
@@ -559,27 +529,6 @@ describe Puppet::Parser::Scope do
     end
   end
 
-  describe "when unsetting variables" do
-    it "should be able to unset normal variables" do
-      @scope.setvar("foo", "bar")
-      @scope.unsetvar("foo")
-      @scope.lookupvar("foo").should == ""
-    end
-
-    it "should be able to unset ephemeral variables" do
-      @scope.setvar("0", "bar", :ephemeral => true)
-      @scope.unsetvar("0")
-      @scope.lookupvar("0").should == ""
-    end
-
-    it "should not unset ephemeral variables in previous ephemeral scope" do
-      @scope.setvar("0", "bar", :ephemeral => true)
-      @scope.new_ephemeral
-      @scope.unsetvar("0")
-      @scope.lookupvar("0").should == "bar"
-    end
-  end
-
   it "should use its namespaces to find hostclasses" do
     klass = @scope.known_resource_types.add Puppet::Resource::Type.new(:hostclass, "a::b::c")
     @scope.add_namespace "a::b"
@@ -595,34 +544,51 @@ describe Puppet::Parser::Scope do
   describe "when managing defaults" do
     it "should be able to set and lookup defaults" do
       param = Puppet::Parser::Resource::Param.new(:name => :myparam, :value => "myvalue", :source => stub("source"))
-      @scope.setdefaults(:mytype, param)
+      @scope.define_settings(:mytype, param)
       @scope.lookupdefaults(:mytype).should == {:myparam => param}
     end
 
     it "should fail if a default is already defined and a new default is being defined" do
       param = Puppet::Parser::Resource::Param.new(:name => :myparam, :value => "myvalue", :source => stub("source"))
-      @scope.setdefaults(:mytype, param)
-      lambda { @scope.setdefaults(:mytype, param) }.should raise_error(Puppet::ParseError)
+      @scope.define_settings(:mytype, param)
+      expect {
+        @scope.define_settings(:mytype, param)
+      }.to raise_error(Puppet::ParseError, /Default already defined .* cannot redefine/)
     end
 
     it "should return multiple defaults at once" do
       param1 = Puppet::Parser::Resource::Param.new(:name => :myparam, :value => "myvalue", :source => stub("source"))
-      @scope.setdefaults(:mytype, param1)
+      @scope.define_settings(:mytype, param1)
       param2 = Puppet::Parser::Resource::Param.new(:name => :other, :value => "myvalue", :source => stub("source"))
-      @scope.setdefaults(:mytype, param2)
+      @scope.define_settings(:mytype, param2)
 
       @scope.lookupdefaults(:mytype).should == {:myparam => param1, :other => param2}
     end
 
     it "should look up defaults defined in parent scopes" do
       param1 = Puppet::Parser::Resource::Param.new(:name => :myparam, :value => "myvalue", :source => stub("source"))
-      @scope.setdefaults(:mytype, param1)
+      @scope.define_settings(:mytype, param1)
 
       child_scope = @scope.newscope
       param2 = Puppet::Parser::Resource::Param.new(:name => :other, :value => "myvalue", :source => stub("source"))
-      child_scope.setdefaults(:mytype, param2)
+      child_scope.define_settings(:mytype, param2)
 
       child_scope.lookupdefaults(:mytype).should == {:myparam => param1, :other => param2}
+    end
+  end
+
+  context "#true?" do
+    { "a string" => true,
+      "true"     => true,
+      "false"    => true,
+      true       => true,
+      ""         => false,
+      :undef     => false,
+      nil        => false
+    }.each do |input, output|
+      it "should treat #{input.inspect} as #{output}" do
+        Puppet::Parser::Scope.true?(input).should == output
+      end
     end
   end
 end

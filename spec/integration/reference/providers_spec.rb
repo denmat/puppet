@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/util/reference'
 
@@ -12,6 +11,6 @@ describe reference do
   end
 
   it "should be able to be rendered as markdown" do
-    lambda { reference.to_markdown }.should_not raise_error
+    reference.to_markdown
   end
 end

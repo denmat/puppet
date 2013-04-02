@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe "Puppet::Resource::Ral" do
   describe "find" do
@@ -21,12 +20,17 @@ describe "Puppet::Resource::Ral" do
 
     it "if there is no instance, it should create one" do
       wrong_instance = stub "wrong user", :name => "bob"
+      root = mock "Root User"
+      root_resource = mock "Root Resource"
 
       require 'puppet/type/user'
       Puppet::Type::User.expects(:instances).returns([ wrong_instance, wrong_instance ])
+      Puppet::Type::User.expects(:new).with(has_entry(:name => "root")).returns(root)
+      root.expects(:to_resource).returns(root_resource)
+
       result = Puppet::Resource::Ral.new.find(@request)
-      result.should be_is_a(Puppet::Resource)
-      result.title.should == "root"
+
+      result.should == root_resource
     end
   end
 
@@ -109,21 +113,23 @@ describe "Puppet::Resource::Ral" do
       @instance    = stub 'instance', :to_ral => @ral_res
       @request     = stub 'request',  :key => "user/", :instance => @instance
       @catalog     = stub 'catalog'
+      @report      = stub 'report'
+      @transaction = stub 'transaction', :report => @report
 
       Puppet::Resource::Catalog.stubs(:new).returns(@catalog)
-      @catalog.stubs(:apply)
+      @catalog.stubs(:apply).returns(@transaction)
       @catalog.stubs(:add_resource)
     end
 
     it "should apply a new catalog with a ral object in it" do
       Puppet::Resource::Catalog.expects(:new).returns(@catalog)
       @catalog.expects(:add_resource).with(@ral_res)
-      @catalog.expects(:apply)
-      Puppet::Resource::Ral.new.save(@request)
+      @catalog.expects(:apply).returns(@transaction)
+      Puppet::Resource::Ral.new.save(@request).should
     end
 
     it "should return a regular resource that used to be the ral resource" do
-      Puppet::Resource::Ral.new.save(@request).should == @rebuilt_res
+      Puppet::Resource::Ral.new.save(@request).should == [@rebuilt_res, @report]
     end
   end
 end

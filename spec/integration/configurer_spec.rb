@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/configurer'
 
@@ -48,6 +47,7 @@ describe Puppet::Configurer do
       Puppet::Transaction::Report.indirection.stubs(:save)
 
       Puppet[:lastrunfile] = tmpfile("lastrunfile")
+      Puppet.settings.setting(:lastrunfile).mode = 0666
       Puppet[:report] = true
 
       # We only record integer seconds in the timestamp, and truncate
@@ -56,6 +56,10 @@ describe Puppet::Configurer do
       t1 = Time.now.tv_sec
       @configurer.run :catalog => @catalog, :report => report
       t2 = Time.now.tv_sec
+
+      file_mode = Puppet.features.microsoft_windows? ? '100644' : '100666'
+
+      File.stat(Puppet[:lastrunfile]).mode.to_s(8).should == file_mode
 
       summary = nil
       File.open(Puppet[:lastrunfile], "r") do |fd|

@@ -1,7 +1,7 @@
-#!/usr/bin/env ruby
+#! /usr/bin/env ruby
+require 'spec_helper'
 
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
-
+require 'pathname'
 require 'puppet/util/selinux'
 include Puppet::Util::SELinux
 
@@ -34,7 +34,7 @@ describe Puppet::Util::SELinux do
     end
   end
 
-  describe "filesystem detection" do
+  describe "read_mounts" do
     before :each do
       fh = stub 'fh', :close => nil
       File.stubs(:open).with("/proc/mounts").returns fh
@@ -48,6 +48,17 @@ describe Puppet::Util::SELinux do
         '/mnt/nfs' => 'nfs',
         '/proc' => 'proc',
         '/dev' => 'tmpfs' }
+    end
+  end
+
+  describe "filesystem detection" do
+    before :each do
+      self.stubs(:read_mounts).returns({
+        '/'        => 'ext3',
+        '/sys'     => 'sysfs',
+        '/mnt/nfs' => 'nfs',
+        '/proc'    => 'proc',
+        '/dev'     => 'tmpfs' })
     end
 
     it "should match a path on / to ext3" do
@@ -66,41 +77,21 @@ describe Puppet::Util::SELinux do
       selinux_label_support?('/mnt/nfs/testfile').should be_false
     end
 
-    it "should follow symlinks when determining file systems" do
-      self.stubs(:realpath).with('/mnt/symlink/testfile').returns('/mnt/nfs/dest/testfile')
+    it "(#8714) don't follow symlinks when determining file systems", :unless => Puppet.features.microsoft_windows? do
+      scratch = Pathname(PuppetSpec::Files.tmpdir('selinux'))
 
-      selinux_label_support?('/mnt/symlink/testfile').should be_false
+      self.stubs(:read_mounts).returns({
+          '/'             => 'ext3',
+          scratch + 'nfs' => 'nfs',
+        })
+
+      (scratch + 'foo').make_symlink('nfs/bar')
+      selinux_label_support?(scratch + 'foo').should be_true
     end
 
-  end
-
-  describe "realpath" do
     it "should handle files that don't exist" do
-
-      # Since I'm stubbing Pathname.new for this test,
-      # I need to also stub the internal calls to Pathname.new,
-      # which happen in Pathname.dirname and Parthname.basename
-      # I want those to return real Pathname objects,
-      # so I'm creating them before the stub is in place.
-      realpaths = Hash.new {|hash, path| hash[path] = Pathname.new(path) }
-      paths = ['symlink', '/mnt']
-      paths.each { |path| realpaths[path] }
-
-      realpaths['/mnt/symlink'] = stubs "Pathname"
-      realpaths['/mnt/symlink'].stubs(:realpath).returns(realpaths['/mnt/nfs/dest'])
-      realpaths['/mnt/symlink'].stubs(:exist?).returns(true)
-
-      realpaths['/mnt/symlink/nonexistant'] = stubs "Pathname"
-      realpaths['/mnt/symlink/nonexistant'].stubs(:realpath).raises(Errno::ENOENT)
-      realpaths['/mnt/symlink/nonexistant'].stubs(:exist?).returns(false)
-      realpaths['/mnt/symlink/nonexistant'].stubs(:dirname).returns(realpaths['/mnt/symlink'])
-      realpaths['/mnt/symlink/nonexistant'].stubs(:basename).returns(realpaths['nonexistant'])
-
-      realpaths.each do |path, value|
-        Pathname.stubs(:new).with(path).returns(value)
-      end
-
-      realpath('/mnt/symlink/nonexistant').should == '/mnt/nfs/dest/nonexistant'
+      scratch = Pathname(PuppetSpec::Files.tmpdir('selinux'))
+      selinux_label_support?(scratch + 'nonesuch').should be_true
     end
   end
 
@@ -136,6 +127,24 @@ describe Puppet::Util::SELinux do
       self.expects(:find_fs).with("/foo").returns "ext3"
       Selinux.expects(:matchpathcon).with("/foo", 0).returns [0, "user_u:role_r:type_t:s0"]
       get_selinux_default_context("/foo").should == "user_u:role_r:type_t:s0"
+    end
+
+    it "handles permission denied errors by issuing a warning" do
+      self.stubs(:selinux_support?).returns true
+      self.stubs(:selinux_label_support?).returns true
+      Selinux.stubs(:matchpathcon).with("/root/chuj", 0).returns(-1)
+      self.stubs(:file_lstat).with("/root/chuj").raises(Errno::EACCES, "/root/chuj")
+
+      get_selinux_default_context("/root/chuj").should be_nil
+    end
+
+    it "handles no such file or directory errors by issuing a warning" do
+      self.stubs(:selinux_support?).returns true
+      self.stubs(:selinux_label_support?).returns true
+      Selinux.stubs(:matchpathcon).with("/root/chuj", 0).returns(-1)
+      self.stubs(:file_lstat).with("/root/chuj").raises(Errno::ENOENT, "/root/chuj")
+
+      get_selinux_default_context("/root/chuj").should be_nil
     end
 
     it "should return nil if matchpathcon returns failure" do

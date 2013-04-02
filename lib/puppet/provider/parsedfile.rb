@@ -103,6 +103,37 @@ class Puppet::Provider::ParsedFile < Puppet::Provider
 # HEADER: is definitely not recommended.\n}
   end
 
+  # An optional regular expression matched by third party headers.
+  #
+  # For example, this can be used to filter the vixie cron headers as
+  # erronously exported by older cron versions.
+  #
+  # @api private
+  # @abstract Providers based on ParsedFile may implement this to make it
+  #   possible to identify a header maintained by a third party tool.
+  #   The provider can then allow that header to remain near the top of the
+  #   written file, or remove it after composing the file content.
+  #   If implemented, the function must return a Regexp object.
+  #   The expression must be tailored to match exactly one third party header.
+  # @see drop_native_header
+  # @note When specifying regular expressions in multiline mode, avoid
+  #   greedy repititions such as '.*' (use .*? instead). Otherwise, the
+  #   provider may drop file content between sparse headers.
+  def self.native_header_regex
+    nil
+  end
+
+  # How to handle third party headers.
+  # @api private
+  # @abstract Providers based on ParsedFile that make use of the support for
+  #   third party headers may override this method to return +true+.
+  #   When this is done, headers that are matched by the native_header_regex
+  #   are not written back to disk.
+  # @see native_header_regex
+  def self.drop_native_header
+    false
+  end
+
   # Add another type var.
   def self.initvars
     @records = []
@@ -127,7 +158,7 @@ class Puppet::Provider::ParsedFile < Puppet::Provider
   # Override the default method with a lot more functionality.
   def self.mk_resource_methods
     [resource_type.validproperties, resource_type.parameters].flatten.each do |attr|
-      attr = symbolize(attr)
+      attr = attr.intern
       define_method(attr) do
 #                if @property_hash.empty?
 #                    # Note that this swaps the provider out from under us.
@@ -216,7 +247,16 @@ class Puppet::Provider::ParsedFile < Puppet::Provider
 
   # Prefetch an individual target.
   def self.prefetch_target(target)
-    target_records = retrieve(target).each do |r|
+
+    begin
+      target_records = retrieve(target)
+    rescue Puppet::Util::FileType::FileReadError => detail
+      puts detail.backtrace if Puppet[:trace]
+      Puppet.err "Could not prefetch #{self.resource_type.name} provider '#{self.name}' target '#{target}': #{detail}. Treating as empty"
+      target_records = []
+    end
+
+    target_records.each do |r|
       r[:on_disk] = true
       r[:target] = target
       r[:ensure] = :present
@@ -299,8 +339,26 @@ class Puppet::Provider::ParsedFile < Puppet::Provider
     targets.uniq.compact
   end
 
+  # Compose file contents from the set of records.
+  #
+  # If self.native_header_regex is not nil, possible vendor headers are
+  # identified by matching the return value against the expression.
+  # If one (or several consecutive) such headers, are found, they are
+  # either moved in front of the self.header if self.drop_native_header
+  # is false (this is the default), or removed from the return value otherwise.
+  #
+  # @api private
   def self.to_file(records)
     text = super
+    if native_header_regex and (match = text.match(native_header_regex))
+      if drop_native_header
+        # concatenate the text in front of and after the native header
+        text = match.pre_match + match.post_match
+      else
+        native_header = match[0]
+        return native_header + header + match.pre_match + match.post_match
+      end
+    end
     header + text
   end
 

@@ -28,9 +28,9 @@ module Puppet::Parser::Files
   end
 
   # Find the concrete file denoted by +file+. If +file+ is absolute,
-  # return it directly. Otherwise try to find it as a template in a
-  # module. If that fails, return it relative to the +templatedir+ config
-  # param.
+  # return it directly. Otherwise try to find relative to the +templatedir+
+  # config param.  If that fails try to find it as a template in a
+  # module.
   # In all cases, an absolute path is returned, which does not
   # necessarily refer to an existing file
   def find_template(template, environment = nil)
@@ -82,7 +82,7 @@ module Puppet::Parser::Files
   # nil if the path is empty or absolute (starts with a /).
   # This method can return nil & anyone calling it needs to handle that.
   def split_file_path(path)
-    path.split(File::SEPARATOR, 2) unless path == "" or path == File.expand_path(path)
+    path.split(File::SEPARATOR, 2) unless path == "" or Puppet::Util.absolute_path?(path)
   end
 
 end

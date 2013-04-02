@@ -1,14 +1,8 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2008-4-8.
-#  Copyright (c) 2008. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe Puppet::Node::Facts do
   describe "when using the indirector" do
-    after { Puppet::Util::Cacher.expire }
-
     it "should expire any cached node instances when it is saved" do
       Puppet::Node::Facts.indirection.stubs(:terminus_class).returns :yaml
 
@@ -16,7 +10,7 @@ describe Puppet::Node::Facts do
       terminus = Puppet::Node::Facts.indirection.terminus(:yaml)
       terminus.stubs :save
 
-      Puppet::Node.indirection.expects(:expire).with("me")
+      Puppet::Node.indirection.expects(:expire).with("me", optionally(instance_of(Hash)))
 
       facts = Puppet::Node::Facts.new("me")
       Puppet::Node::Facts.indirection.save(facts)

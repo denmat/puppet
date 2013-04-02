@@ -8,18 +8,18 @@ require "rdoc/code_objects"
 require "puppet/util/rdoc/code_objects"
 require "rdoc/tokenstream"
 
-if ::RUBY_VERSION =~ /1.9/
-	require "rdoc/markup/preprocess"
-	require "rdoc/parser"
-else
+if ::RUBY_VERSION =~ /^1.8/
 	require "rdoc/markup/simple_markup/preprocess"
 	require "rdoc/parsers/parserfactory"
+else
+	require "rdoc/markup/preprocess"
+	require "rdoc/parser"
 end
 
 module RDoc
 
 class Parser
-  extend ParserFactory unless ::RUBY_VERSION =~ /1.9/
+  extend ParserFactory if ::RUBY_VERSION =~ /^1.8/
 
   SITE = "__site__"
 
@@ -99,7 +99,7 @@ class Parser
       modpath = $1
       name = $2
       Puppet.debug "rdoc: module #{name} into #{modpath} ?"
-      Puppet::Module.modulepath.each do |mp|
+      Puppet::Node::Environment.new.modulepath.each do |mp|
         if File.identical?(modpath,mp)
           Puppet.debug "rdoc: found module #{name}"
           return name
@@ -110,10 +110,12 @@ class Parser
       # there can be paths we don't want to scan under modules
       # imagine a ruby or manifest that would be distributed as part as a module
       # but we don't want those to be hosted under <site>
-      Puppet::Module.modulepath.each do |mp|
+      Puppet::Node::Environment.new.modulepath.each do |mp|
         # check that fullpath is a descendant of mp
         dirname = fullpath
-        while (dirname = File.dirname(dirname)) != '/'
+        previous = dirname
+        while (dirname = File.dirname(previous)) != previous
+          previous = dirname
           return nil if File.identical?(dirname,mp)
         end
       end
@@ -127,8 +129,10 @@ class Parser
   def scan_top_level(container)
     # use the module README as documentation for the module
     comment = ""
-    readme = File.join(File.dirname(File.dirname(@input_file_name)), "README")
-    comment = File.open(readme,"r") { |f| f.read } if FileTest.readable?(readme)
+    %w{README README.rdoc}.each do |rfile|
+      readme = File.join(File.dirname(File.dirname(@input_file_name)), rfile)
+      comment = File.open(readme,"r") { |f| f.read } if FileTest.readable?(readme)
+    end
     look_for_directives_in(container, comment) unless comment.empty?
 
     # infer module name from directory

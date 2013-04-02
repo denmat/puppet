@@ -1,27 +1,32 @@
 module Puppet
   newtype(:schedule) do
-    @doc = "Defined schedules for Puppet.  The important thing to understand
-      about how schedules are currently implemented in Puppet is that they
-      can only be used to stop a resource from being applied, they never
-      guarantee that it is applied.
+    @doc = <<-'EOT'
+      Define schedules for Puppet. Resources can be limited to a schedule by using the
+      [`schedule`](http://docs.puppetlabs.com/references/latest/metaparameter.html#schedule)
+      metaparameter.
 
-      Every time Puppet applies its configuration, it will collect the
-      list of resources whose schedule does not eliminate them from
+      Currently, **schedules can only be used to stop a resource from being
+      applied;** they cannot cause a resource to be applied when it otherwise
+      wouldn't be, and they cannot accurately specify a time when a resource
+      should run.
+
+      Every time Puppet applies its configuration, it will apply the
+      set of resources whose schedule does not eliminate them from
       running right then, but there is currently no system in place to
       guarantee that a given resource runs at a given time.  If you
       specify a very  restrictive schedule and Puppet happens to run at a
       time within that schedule, then the resources will get applied;
       otherwise, that work may never get done.
 
-      Thus, it behooves you to use wider scheduling (e.g., over a couple of
+      Thus, it is advisable to use wider scheduling (e.g., over a couple of
       hours) combined with periods and repetitions.  For instance, if you
       wanted to restrict certain resources to only running once, between
       the hours of two and 4 AM, then you would use this schedule:
 
-          schedule { maint:
-            range => \"2 - 4\",
+          schedule { 'maint':
+            range  => "2 - 4",
             period => daily,
-            repeat => 1
+            repeat => 1,
           }
 
       With this schedule, the first time that Puppet runs between 2 and 4 AM,
@@ -30,49 +35,56 @@ module Puppet
       run once that day, and they won't get applied outside that schedule
       because they will be outside the scheduled range.
 
-      Puppet automatically creates a schedule for each valid period with the
-      same name as that period (e.g., hourly and daily).  Additionally,
-      a schedule named *puppet* is created and used as the default,
-      with the following attributes:
+      Puppet automatically creates a schedule for each of the valid periods
+      with the same name as that period (e.g., hourly and daily).
+      Additionally, a schedule named `puppet` is created and used as the
+      default, with the following attributes:
 
-          schedule { puppet:
+          schedule { 'puppet':
             period => hourly,
-            repeat => 2
+            repeat => 2,
           }
 
       This will cause resources to be applied every 30 minutes by default.
-      "
+      EOT
+
+    apply_to_all
 
     newparam(:name) do
-      desc "The name of the schedule.  This name is used to retrieve the
+      desc <<-EOT
+        The name of the schedule.  This name is used to retrieve the
         schedule when assigning it to an object:
 
-            schedule { daily:
+            schedule { 'daily':
               period => daily,
-              range => \"2 - 4\",
-            }
-  
-            exec { \"/usr/bin/apt-get update\":
-              schedule => daily
+              range  => "2 - 4",
             }
 
-        "
+            exec { "/usr/bin/apt-get update":
+              schedule => 'daily',
+            }
+
+        EOT
       isnamevar
     end
 
     newparam(:range) do
-      desc "The earliest and latest that a resource can be applied.  This
-        is always a range within a 24 hour period, and hours must be
-        specified in numbers between 0 and 23, inclusive.  Minutes and
-        seconds can be provided, using the normal colon as a separator.
-        For instance:
+      desc <<-EOT
+        The earliest and latest that a resource can be applied.  This is
+        always a hyphen-separated range within a 24 hour period, and hours
+        must be specified in numbers between 0 and 23, inclusive.  Minutes and
+        seconds can optionally be provided, using the normal colon as a
+        separator. For instance:
 
-            schedule { maintenance:
-              range => \"1:30 - 4:30\"
+            schedule { 'maintenance':
+              range => "1:30 - 4:30",
             }
 
         This is mostly useful for restricting certain resources to being
-        applied in maintenance windows or during off-peak hours."
+        applied in maintenance windows or during off-peak hours. Multiple
+        ranges can be applied in array context. As a convenience when specifying
+        ranges, you may cross midnight (e.g.: range => "22:00 - 04:00").
+      EOT
 
       # This is lame; properties all use arrays as values, but parameters don't.
       # That's going to hurt eventually.
@@ -108,11 +120,6 @@ module Puppet
           [range[0][1], range[1][1]].each do |n|
             raise ArgumentError, "Invalid minute '#{n}'" if n and (n < 0 or n > 59)
           end
-          if range[0][0] > range[1][0]
-            self.fail(("Invalid range #{value}; ") +
-              "ranges cannot span days."
-            )
-          end
           ret << range
         }
 
@@ -132,13 +139,13 @@ module Puppet
             if range[1]
               ary << range[1]
             else
-              ary << now.min
+              ary << 0
             end
 
             if range[2]
               ary << range[2]
             else
-              ary << now.sec
+              ary << 0
             end
 
             time = Time.local(*ary)
@@ -157,18 +164,58 @@ module Puppet
             "Assuming upper limit should be that time the next day"
             )
 
-            ary = limits[1].to_a
-            ary[3] += 1
-            limits[1] = Time.local(*ary)
+            # Find midnight between the two days. Adding one second
+            # to the end of the day is easier than dealing with dates.
+            ary = limits[0].to_a
+            ary[0] = 59
+            ary[1] = 59
+            ary[2] = 23
+            midnight = Time.local(*ary)+1
 
-            #self.devfail("Lower limit is above higher limit: %s" %
-            #    limits.inspect
-            #)
+            # If it is currently between the range start and midnight
+            # we consider that a successful match.
+            if now.between?(limits[0], midnight)
+              # We have to check the weekday match here as it is special-cased
+              # to support day-spanning ranges.
+              if @resource[:weekday]
+                return false unless @resource[:weekday].has_key?(now.wday)
+              end
+              return true
+            end
+
+            # If we didn't match between the starting time and midnight
+            # we must now move our midnight back 24 hours and try
+            # between the new midnight (24 hours prior) and the
+            # ending time.
+            midnight -= 86400
+
+            # Now we compare the current time between midnight and the
+            # end time.
+            if now.between?(midnight, limits[1])
+              # This case is the reason weekday matching is special cased
+              # in the range parameter. If we match a range that has spanned
+              # past midnight we want to match against the weekday when the range
+              # started, not when it currently is.
+              if @resource[:weekday]
+                return false unless @resource[:weekday].has_key?((now - 86400).wday)
+              end
+              return true
+            end
+
+            # If neither of the above matched then we don't match the
+            # range schedule.
+            return false
           end
 
-          #self.info limits.inspect
-          #self.notice now
-          return now.between?(*limits)
+          # Check to see if a weekday parameter was specified and, if so,
+          # do we match it or not. If we fail we can stop here.
+          # This is required because spanning ranges forces us to check
+          # weekday within the range parameter.
+          if @resource[:weekday]
+            return false unless @resource[:weekday].has_key?(now.wday)
+          end
+
+          return true if now.between?(*limits)
         end
 
         # Else, return false, since our current time isn't between
@@ -188,24 +235,23 @@ module Puppet
     end
 
     newparam(:period) do
-      desc "The period of repetition for a resource.  Choose from among
-        a fixed list of *hourly*, *daily*, *weekly*, and *monthly*.
-        The default is for a resource to get applied every time that
-        Puppet runs, whatever that period is.
+      desc <<-EOT
+        The period of repetition for a resource. The default is for a resource
+        to get applied every time Puppet runs.
 
         Note that the period defines how often a given resource will get
         applied but not when; if you would like to restrict the hours
         that a given resource can be applied (e.g., only at night during
-        a maintenance window) then use the `range` attribute.
+        a maintenance window), then use the `range` attribute.
 
         If the provided periods are not sufficient, you can provide a
         value to the *repeat* attribute, which will cause Puppet to
         schedule the affected resources evenly in the period the
         specified number of times.  Take this schedule:
 
-            schedule { veryoften:
+            schedule { 'veryoften':
               period => hourly,
-              repeat => 6
+              repeat => 6,
             }
 
         This can cause Puppet to apply that resource up to every 10 minutes.
@@ -216,17 +262,18 @@ module Puppet
         often (e.g., long-running Puppet runs will squash conflictingly scheduled runs).
 
         See the `periodmatch` attribute for tuning whether to match
-        times by their distance apart or by their specific value."
+        times by their distance apart or by their specific value.
+      EOT
 
       newvalues(:hourly, :daily, :weekly, :monthly, :never)
 
-      @@scale = {
+      ScheduleScales = {
         :hourly => 3600,
         :daily => 86400,
         :weekly => 604800,
         :monthly => 2592000
       }
-      @@methods = {
+      ScheduleMethods = {
         :hourly => :hour,
         :daily => :day,
         :monthly => :month,
@@ -243,7 +290,7 @@ module Puppet
         value = self.value
         case @resource[:periodmatch]
         when :number
-          method = @@methods[value]
+          method = ScheduleMethods[value]
           if method.is_a?(Proc)
             return method.call(previous, now)
           else
@@ -251,7 +298,7 @@ module Puppet
             return now.send(method) != previous.send(method)
           end
         when :distance
-          scale = @@scale[value]
+          scale = ScheduleScales[value]
 
           # If the number of seconds between the two times is greater
           # than the unit of time, we match.  We divide the scale
@@ -266,8 +313,8 @@ module Puppet
     end
 
     newparam(:repeat) do
-      desc "How often the application gets repeated in a given period.
-        Defaults to 1. Must be an integer."
+      desc "How often a given resource may be applied in this schedule's `period`.
+        Defaults to 1; must be an integer."
 
       defaultto 1
 
@@ -295,6 +342,76 @@ module Puppet
 
       def match?(previous, now)
         true
+      end
+    end
+
+    newparam(:weekday) do
+      desc <<-EOT
+        The days of the week in which the schedule should be valid.
+        You may specify the full day name (Tuesday), the three character
+        abbreviation (Tue), or a number corresponding to the day of the
+        week where 0 is Sunday, 1 is Monday, etc. You may pass an array
+        to specify multiple days. If not specified, the day of the week
+        will not be considered in the schedule.
+
+        If you are also using a range match that spans across midnight
+        then this parameter will match the day that it was at the start
+        of the range, not necessarily the day that it is when it matches.
+        For example, consider this schedule:
+
+          schedule { 'maintenance_window':
+            range   => '22:00 - 04:00',
+            weekday => 'Saturday',
+          }
+
+        This will match at 11 PM on Saturday and 2 AM on Sunday, but not
+        at 2 AM on Saturday.
+      EOT
+
+      validate do |values|
+        values = [values] unless values.is_a?(Array)
+        values.each { |value|
+          unless value.is_a?(String) and
+              (value =~ /^[0-6]$/ or value =~ /^(Mon|Tues?|Wed(?:nes)?|Thu(?:rs)?|Fri|Sat(?:ur)?|Sun)(day)?$/i)
+            raise ArgumentError, "%s is not a valid day of the week" % value
+          end
+        }
+      end
+
+      weekdays = {
+        'sun' => 0,
+        'mon' => 1,
+        'tue' => 2,
+        'wed' => 3,
+        'thu' => 4,
+        'fri' => 5,
+        'sat' => 6,
+      }
+
+      munge do |values|
+        values = [values] unless values.is_a?(Array)
+        ret = {}
+
+        values.each { |value|
+           if value =~ /^[0-6]$/
+              index = value.to_i
+           else
+              index = weekdays[value[0,3].downcase]
+           end
+            ret[index] = true
+        }
+        ret
+      end
+
+      def match?(previous, now)
+        # Special case weekday matching with ranges to a no-op here.
+        # If the ranges span days then we can't simply match the current
+        # weekday, as we want to match the weekday as it was when the range
+        # started.  As a result, all of that logic is in range, not here.
+        return true if @resource[:range]
+
+        return true if value.has_key?(now.wday)
+        false
       end
     end
 

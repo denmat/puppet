@@ -15,7 +15,7 @@ class Puppet::FileServing::Configuration::Parser < Puppet::Util::LoadedFile
 
     File.open(self.file) { |f|
       mount = nil
-      f.each { |line|
+      f.each_line { |line|
         # Have the count increment at the top, in case we throw exceptions.
         @count += 1
 
@@ -24,9 +24,10 @@ class Puppet::FileServing::Configuration::Parser < Puppet::Util::LoadedFile
         when /^\s*$/; next # skip blank lines
         when /\[([-\w]+)\]/
           mount = newmount($1)
-        when /^\s*(\w+)\s+(.+)$/
+        when /^\s*(\w+)\s+(.+?)(\s*#.*)?$/
           var = $1
           value = $2
+          value.strip!
           raise(ArgumentError, "Fileserver configuration file does not use '=' as a separator") if value =~ /^=/
           case var
           when "path"
@@ -58,12 +59,8 @@ class Puppet::FileServing::Configuration::Parser < Puppet::Util::LoadedFile
       begin
         mount.info "allowing #{val} access"
         mount.allow(val)
-      rescue AuthStoreError => detail
-
-              raise ArgumentError.new(
-        detail.to_s,
-        
-          @count, file)
+      rescue Puppet::AuthStoreError => detail
+        raise ArgumentError.new(detail.to_s, @count, file)
       end
     }
   end
@@ -75,12 +72,8 @@ class Puppet::FileServing::Configuration::Parser < Puppet::Util::LoadedFile
       begin
         mount.info "denying #{val} access"
         mount.deny(val)
-      rescue AuthStoreError => detail
-
-              raise ArgumentError.new(
-        detail.to_s,
-        
-          @count, file)
+      rescue Puppet::AuthStoreError => detail
+        raise ArgumentError.new(detail.to_s, @count, file)
       end
     }
   end
@@ -106,7 +99,7 @@ class Puppet::FileServing::Configuration::Parser < Puppet::Util::LoadedFile
       begin
         mount.path = value
       rescue ArgumentError => detail
-        Puppet.err "Removing mount #{mount.name}: #{detail}"
+        Puppet.log_exception(detail, "Removing mount \"#{mount.name}\": #{detail}")
         @mounts.delete(mount.name)
       end
     else

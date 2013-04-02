@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/configurer/downloader'
 
@@ -20,15 +19,6 @@ describe Puppet::Configurer::Downloader do
     dler.name.should == "facts"
     dler.path.should == "path"
     dler.source.should == "source"
-  end
-
-  it "should be able to provide a timeout value" do
-    Puppet::Configurer::Downloader.should respond_to(:timeout)
-  end
-
-  it "should use the configtimeout, converted to an integer, as its timeout" do
-    Puppet.settings.expects(:value).with(:configtimeout).returns "50"
-    Puppet::Configurer::Downloader.timeout.should == 50
   end
 
   describe "when creating the file that does the downloading" do
@@ -61,16 +51,34 @@ describe Puppet::Configurer::Downloader do
       @dler.file
     end
 
-    it "should always set the owner to the current UID" do
-      Process.expects(:uid).returns 51
-      Puppet::Type.type(:file).expects(:new).with { |opts| opts[:owner] == 51 }
-      @dler.file
+    describe "on POSIX" do
+      before :each do
+        Puppet.features.stubs(:microsoft_windows?).returns false
+      end
+
+      it "should always set the owner to the current UID" do
+        Process.expects(:uid).returns 51
+        Puppet::Type.type(:file).expects(:new).with { |opts| opts[:owner] == 51 }
+        @dler.file
+      end
+
+      it "should always set the group to the current GID" do
+        Process.expects(:gid).returns 61
+        Puppet::Type.type(:file).expects(:new).with { |opts| opts[:group] == 61 }
+        @dler.file
+      end
     end
 
-    it "should always set the group to the current GID" do
-      Process.expects(:gid).returns 61
-      Puppet::Type.type(:file).expects(:new).with { |opts| opts[:group] == 61 }
-      @dler.file
+    describe "on Windows", :if => Puppet.features.microsoft_windows? do
+      it "should omit the owner" do
+        Puppet::Type.type(:file).expects(:new).with { |opts| opts[:owner] == nil }
+        @dler.file
+      end
+
+      it "should omit the group" do
+        Puppet::Type.type(:file).expects(:new).with { |opts| opts[:group] == nil }
+        @dler.file
+      end
     end
 
     it "should always force the download" do
@@ -98,14 +106,15 @@ describe Puppet::Configurer::Downloader do
 
   describe "when creating the catalog to do the downloading" do
     before do
-      @dler = Puppet::Configurer::Downloader.new("foo", "/download/path", "source")
+      @path = make_absolute("/download/path")
+      @dler = Puppet::Configurer::Downloader.new("foo", @path, make_absolute("source"))
     end
 
     it "should create a catalog and add the file to it" do
       catalog = @dler.catalog
       catalog.resources.size.should == 1
       catalog.resources.first.class.should == Puppet::Type::File
-      catalog.resources.first.name.should == "/download/path"
+      catalog.resources.first.name.should == @path
     end
 
     it "should specify that it is not managing a host catalog" do
@@ -136,8 +145,8 @@ describe Puppet::Configurer::Downloader do
       @dler.evaluate
     end
 
-    it "should set a timeout for the download" do
-      Puppet::Configurer::Downloader.expects(:timeout).returns 50
+    it "should set a timeout for the download using the `configtimeout` setting" do
+      Puppet[:configtimeout] = 50
       Timeout.expects(:timeout).with(50)
 
       @dler.evaluate

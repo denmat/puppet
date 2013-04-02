@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'tempfile'
 require 'puppet_spec/files'
@@ -14,6 +13,7 @@ describe "Pure ruby manifests" do
     @scope_resource = stub 'scope_resource', :builtin? => true, :finish => nil, :ref => 'Class[main]'
     @scope = stub 'scope', :resource => @scope_resource, :source => mock("source")
     @test_dir = tmpdir('ruby_manifest_test')
+    Puppet.expects(:deprecation_warning).at_least(1)
   end
 
   after do

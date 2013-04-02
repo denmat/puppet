@@ -1,13 +1,12 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/resource/catalog'
 
-describe "Puppet::Resource::Catalog::Queue", :if => Puppet.features.pson? do
+describe "Puppet::Resource::Catalog::Queue" do
   before do
     Puppet::Resource::Catalog.indirection.terminus(:queue)
-    @catalog = Puppet::Resource::Catalog.new
+    @catalog = Puppet::Resource::Catalog.new("foo")
 
     @one = Puppet::Resource.new(:file, "/one")
     @two = Puppet::Resource.new(:file, "/two")
@@ -20,15 +19,15 @@ describe "Puppet::Resource::Catalog::Queue", :if => Puppet.features.pson? do
 
   after { Puppet.settings.clear }
 
-  it "should render catalogs to pson and send them via the queue client when catalogs are saved" do
+  it "should render catalogs to pson and publish them via the queue client when catalogs are saved" do
     terminus = Puppet::Resource::Catalog.indirection.terminus(:queue)
 
     client = mock 'client'
     terminus.stubs(:client).returns client
 
-    client.expects(:send_message).with(:catalog, @catalog.to_pson)
+    client.expects(:publish_message).with(:catalog, @catalog.to_pson)
 
-    request = Puppet::Indirector::Request.new(:catalog, :save, "foo", :instance => @catalog)
+    request = Puppet::Indirector::Request.new(:catalog, :save, "foo", @catalog)
 
     terminus.save(request)
   end

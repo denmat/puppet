@@ -1,6 +1,9 @@
+require 'find'
+require 'forwardable'
 require 'puppet/node/environment'
 
 class Puppet::Parser::TypeLoader
+  extend  Forwardable
   include Puppet::Node::Environment::Helper
 
   # Helper class that makes sure we don't try to import the same file
@@ -80,7 +83,7 @@ class Puppet::Parser::TypeLoader
 
     loaded_asts = []
     files.each do |file|
-      unless file =~ /^#{File::SEPARATOR}/
+      unless Puppet::Util.absolute_path?(file)
         file = File.join(dir, file)
       end
       @loading_helper.do_once(file) do
@@ -92,9 +95,20 @@ class Puppet::Parser::TypeLoader
     end
   end
 
-  def known_resource_types
-    environment.known_resource_types
+  def import_all
+    # And then load all files from each module, but (relying on system
+    # behavior) only load files from the first module of a given name.  E.g.,
+    # given first/foo and second/foo, only files from first/foo will be loaded.
+    environment.modules.each do |mod|
+      Find.find(mod.manifests) do |path|
+        if path =~ /\.pp$/ or path =~ /\.rb$/
+          import(path)
+        end
+      end
+    end
   end
+
+  def_delegator :environment, :known_resource_types
 
   def initialize(env)
     self.environment = env
@@ -141,5 +155,4 @@ class Puppet::Parser::TypeLoader
     end
     return result
   end
-
 end

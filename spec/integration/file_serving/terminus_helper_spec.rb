@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/file_serving/terminus_helper'
 
@@ -14,7 +13,7 @@ end
 describe Puppet::FileServing::TerminusHelper do
   it "should be able to recurse on a single file" do
     @path = Tempfile.new("fileset_integration")
-    request = Puppet::Indirector::Request.new(:metadata, :find, @path.path, :recurse => true)
+    request = Puppet::Indirector::Request.new(:metadata, :find, @path.path, nil, :recurse => true)
 
     tester = TerminusHelperIntegrationTester.new
     lambda { tester.path2instances(request, @path.path) }.should_not raise_error

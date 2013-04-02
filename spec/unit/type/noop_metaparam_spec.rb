@@ -1,13 +1,14 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/type'
 
 describe Puppet::Type.type(:file).attrclass(:noop) do
+  include PuppetSpec::Files
+
   before do
     Puppet.settings.stubs(:use)
-    @file = Puppet::Type.newfile :path => "/what/ever"
+    @file = Puppet::Type.newfile :path => make_absolute("/what/ever")
   end
 
   it "should accept true as a value" do
@@ -20,8 +21,8 @@ describe Puppet::Type.type(:file).attrclass(:noop) do
 
   describe "when set on a resource" do
     it "should default to the :noop setting" do
-      Puppet.settings.expects(:value).with(:noop).returns "myval"
-      @file.noop.should == "myval"
+      Puppet[:noop] = true
+      @file.noop.should == true
     end
 
     it "should prefer true values from the attribute" do

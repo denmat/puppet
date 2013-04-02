@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 resources = Puppet::Type.type(:resources)
 
@@ -52,14 +51,13 @@ describe resources do
           @resources.generate.collect { |r| r.ref }.should_not include(@host1.ref)
         end
 
-        it "should not include the skipped users" do
+        it "should not include the skipped system users" do
           res = Puppet::Type.type(:resources).new :name => :user, :purge => true
           res.catalog = Puppet::Resource::Catalog.new
 
-          users = [
-            Puppet::Type.type(:user).new(:name => "root")
-          ]
-          Puppet::Type.type(:user).expects(:instances).returns users
+          root = Puppet::Type.type(:user).new(:name => "root")
+          Puppet::Type.type(:user).expects(:instances).returns [ root ]
+
           list = res.generate
 
           names = list.collect { |r| r[:name] }
@@ -75,7 +73,7 @@ describe resources do
 
         describe "when the instance's do not have an ensure property" do
           it "should not be included in the generated resources" do
-            @no_ensure_resource = Puppet::Type.type(:exec).new(:name => '/usr/bin/env echo')
+            @no_ensure_resource = Puppet::Type.type(:exec).new(:name => "#{File.expand_path('/usr/bin/env')} echo")
             Puppet::Type.type(:host).stubs(:instances).returns [@no_ensure_resource]
             @resources.generate.collect { |r| r.ref }.should_not include(@no_ensure_resource.ref)
           end

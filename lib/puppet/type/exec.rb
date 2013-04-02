@@ -24,7 +24,10 @@ module Puppet
       us at Puppet Labs what you are doing, and hopefully we can work with
       you to get a native resource type for the work you are doing.
 
-      **Autorequires:** If Puppet is managing an exec's cwd or the executable file used in an exec's command, the exec resource will autorequire those files. If Puppet is managing the user that an exec should run as, the exec resource will autorequire that user."
+      **Autorequires:** If Puppet is managing an exec's cwd or the executable
+      file used in an exec's command, the exec resource will autorequire those
+      files. If Puppet is managing the user that an exec should run as, the
+      exec resource will autorequire that user."
 
     # Create a new check mechanism.  It's basically just a parameter that
     # provides one extra 'check' method.
@@ -134,23 +137,21 @@ module Puppet
         normal log level (usually `notice`), but if the command fails
         (meaning its return code does not match the specified code) then
         any output is logged at the `err` log level."
+
+      validate do |command|
+        raise ArgumentError, "Command must be a String, got value of class #{command.class}" unless command.is_a? String
+      end
     end
 
     newparam(:path) do
       desc "The search path used for command execution.
         Commands must be fully qualified if no path is specified.  Paths
-        can be specified as an array or as a colon separated list."
+        can be specified as an array or as a '#{File::PATH_SEPARATOR}' separated list."
 
       # Support both arrays and colon-separated fields.
       def value=(*values)
         @value = values.flatten.collect { |val|
-          if val =~ /;/ # recognize semi-colon separated paths
-            val.split(";")
-          elsif val =~ /^\w:[^:]*$/ # heuristic to avoid splitting a driveletter away
-            val
-          else
-            val.split(":")
-          end
+          val.split(File::PATH_SEPARATOR)
         }.flatten
       end
     end
@@ -165,6 +166,7 @@ module Puppet
       # Most validation is handled by the SUIDManager class.
       validate do |user|
         self.fail "Only root can execute commands as other users" unless Puppet.features.root?
+        self.fail "Unable to execute commands as other users on Windows" if Puppet.features.microsoft_windows?
       end
     end
 
@@ -172,7 +174,7 @@ module Puppet
       desc "The group to run the command as.  This seems to work quite
         haphazardly on different platforms -- it is a platform issue
         not a Ruby or Puppet one, since the same variety exists when
-        running commnands as different users in the shell."
+        running commands as different users in the shell."
       # Validation is handled by the SUIDManager class.
     end
 
@@ -182,10 +184,13 @@ module Puppet
     end
 
     newparam(:logoutput) do
-      desc "Whether to log output.  Defaults to logging output at the
-        loglevel for the `exec` resource. Use *on_failure* to only
-        log the output when the command reports an error.  Values are
-        **true**, *false*, *on_failure*, and any legal log level."
+      desc "Whether to log command output in addition to logging the
+        exit code.  Defaults to `on_failure`, which only logs the output
+        when the command has an exit code that does not match any value
+        specified by the `returns` attribute.  In addition to the values
+        below, you may set this attribute to any legal log level."
+
+      defaultto :on_failure
 
       newvalues(:true, :false, :on_failure)
     end
@@ -220,19 +225,17 @@ module Puppet
     newparam(:timeout) do
       desc "The maximum time the command should take.  If the command takes
         longer than the timeout, the command is considered to have failed
-        and will be stopped.  Use any negative number to disable the timeout.
-        The time is specified in seconds."
+        and will be stopped. The timeout is specified in seconds. The default
+        timeout is 300 seconds and you can set it to 0 to disable the timeout."
 
       munge do |value|
         value = value.shift if value.is_a?(Array)
-        if value.is_a?(String)
-          unless value =~ /^[-\d.]+$/
-            raise ArgumentError, "The timeout must be a number."
-          end
-          Float(value)
-        else
-          value
+        begin
+          value = Float(value)
+        rescue ArgumentError => e
+          raise ArgumentError, "The timeout must be a number."
         end
+        [value, 0.0].max
       end
 
       defaultto 300
@@ -278,25 +281,27 @@ module Puppet
 
 
     newcheck(:refreshonly) do
-      desc "The command should only be run as a
+      desc <<-'EOT'
+        The command should only be run as a
         refresh mechanism for when a dependent object is changed.  It only
         makes sense to use this option when this command depends on some
         other object; it is useful for triggering an action:
 
             # Pull down the main aliases file
-            file { \"/etc/aliases\":
-              source => \"puppet://server/module/aliases\"
+            file { "/etc/aliases":
+              source => "puppet://server/module/aliases"
             }
 
             # Rebuild the database, but only when the file changes
             exec { newaliases:
-              path => [\"/usr/bin\", \"/usr/sbin\"],
-              subscribe => File[\"/etc/aliases\"],
+              path        => ["/usr/bin", "/usr/sbin"],
+              subscribe   => File["/etc/aliases"],
               refreshonly => true
             }
 
         Note that only `subscribe` and `notify` can trigger actions, not `require`,
-        so it only makes sense to use `refreshonly` with `subscribe` or `notify`."
+        so it only makes sense to use `refreshonly` with `subscribe` or `notify`.
+      EOT
 
       newvalues(:true, :false)
 
@@ -313,17 +318,25 @@ module Puppet
     end
 
     newcheck(:creates, :parent => Puppet::Parameter::Path) do
-      desc "A file that this command creates.  If this
-        parameter is provided, then the command will only be run
-        if the specified file does not exist:
+      desc <<-'EOT'
+        A file to look for before running the command. The command will
+        only run if the file **doesn't exist.**
 
-            exec { \"tar xf /my/tar/file.tar\":
-              cwd => \"/var/tmp\",
-              creates => \"/var/tmp/myfile\",
-              path => [\"/usr/bin\", \"/usr/sbin\"]
+        This parameter doesn't cause Puppet to create a file; it is only
+        useful if **the command itself** creates a file.
+
+            exec { "tar -xf /Volumes/nfs02/important.tar":
+              cwd     => "/var/tmp",
+              creates => "/var/tmp/myfile",
+              path    => ["/usr/bin", "/usr/sbin"]
             }
 
-        "
+        In this example, `myfile` is assumed to be a file inside
+        `important.tar`. If it is ever deleted, the exec will bring it
+        back by re-extracting the tarball. If `important.tar` does **not**
+        actually contain `myfile`, the exec will keep running every time
+        Puppet runs.
+      EOT
 
       accept_arrays
 
@@ -335,12 +348,13 @@ module Puppet
     end
 
     newcheck(:unless) do
-      desc "If this parameter is set, then this `exec` will run unless
+      desc <<-'EOT'
+        If this parameter is set, then this `exec` will run unless
         the command returns 0.  For example:
 
-            exec { \"/bin/echo root >> /usr/lib/cron/cron.allow\":
-              path => \"/usr/bin:/usr/sbin:/bin\",
-              unless => \"grep root /usr/lib/cron/cron.allow 2>/dev/null\"
+            exec { "/bin/echo root >> /usr/lib/cron/cron.allow":
+              path   => "/usr/bin:/usr/sbin:/bin",
+              unless => "grep root /usr/lib/cron/cron.allow 2>/dev/null"
             }
 
         This would add `root` to the cron.allow file (on Solaris) unless
@@ -348,7 +362,7 @@ module Puppet
 
         Note that this command follows the same rules as the main command,
         which is to say that it must be fully qualified if the path is not set.
-        "
+      EOT
 
       validate do |cmds|
         cmds = [cmds] unless cmds.is_a? Array
@@ -367,17 +381,22 @@ module Puppet
           return false
         end
 
+        output.split(/\n/).each { |line|
+          self.debug(line)
+        }
+
         status.exitstatus != 0
       end
     end
 
     newcheck(:onlyif) do
-      desc "If this parameter is set, then this `exec` will only run if
+      desc <<-'EOT'
+        If this parameter is set, then this `exec` will only run if
         the command returns 0.  For example:
 
-            exec { \"logrotate\":
-              path => \"/usr/bin:/usr/sbin:/bin\",
-              onlyif => \"test `du /var/log/messages | cut -f1` -gt 100000\"
+            exec { "logrotate":
+              path   => "/usr/bin:/usr/sbin:/bin",
+              onlyif => "test `du /var/log/messages | cut -f1` -gt 100000"
             }
 
         This would run `logrotate` only if that test returned true.
@@ -387,10 +406,10 @@ module Puppet
 
         Also note that onlyif can take an array as its value, e.g.:
 
-            onlyif => [\"test -f /tmp/file1\", \"test -f /tmp/file2\"]
+            onlyif => ["test -f /tmp/file1", "test -f /tmp/file2"]
 
-        This will only run the exec if /all/ conditions in the array return true.
-        "
+        This will only run the exec if _all_ conditions in the array return true.
+      EOT
 
       validate do |cmds|
         cmds = [cmds] unless cmds.is_a? Array
@@ -408,6 +427,10 @@ module Puppet
           err "Check #{value.inspect} exceeded timeout"
           return false
         end
+
+        output.split(/\n/).each { |line|
+          self.debug(line)
+        }
 
         status.exitstatus == 0
       end
@@ -427,7 +450,9 @@ module Puppet
       # Stick the cwd in there if we have it
       reqs << self[:cwd] if self[:cwd]
 
-      self[:command].scan(/^(#{File::SEPARATOR}\S+)/) { |str|
+      file_regex = Puppet.features.microsoft_windows? ? %r{^([a-zA-Z]:[\\/]\S+)} : %r{^(/\S+)}
+
+      self[:command].scan(file_regex) { |str|
         reqs << str
       }
 
@@ -446,7 +471,7 @@ module Puppet
           # fully qualified.  It might not be a bad idea to add
           # unqualified files, but, well, that's a bit more annoying
           # to do.
-          reqs += line.scan(%r{(#{File::SEPARATOR}\S+)})
+          reqs += line.scan(file_regex)
         end
       }
 

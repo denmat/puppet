@@ -1,14 +1,17 @@
 # Manage FreeBSD services.
 Puppet::Type.type(:service).provide :bsd, :parent => :init do
-  desc "FreeBSD's (and probably NetBSD?) form of `init`-style service management.
+  desc <<-EOT
+    FreeBSD's (and probably NetBSD's?) form of `init`-style service management.
 
-  Uses `rc.conf.d` for service enabling and disabling.
+    Uses `rc.conf.d` for service enabling and disabling.
 
-"
+  EOT
 
-  confine :operatingsystem => [:freebsd, :netbsd, :openbsd]
+  confine :operatingsystem => [:freebsd, :netbsd, :openbsd, :dragonfly]
 
-  @@rcconf_dir = '/etc/rc.conf.d'
+  def rcconf_dir
+    '/etc/rc.conf.d'
+  end
 
   def self.defpath
     superclass.defpath
@@ -16,13 +19,13 @@ Puppet::Type.type(:service).provide :bsd, :parent => :init do
 
   # remove service file from rc.conf.d to disable it
   def disable
-    rcfile = File.join(@@rcconf_dir, @model[:name])
+    rcfile = File.join(rcconf_dir, @model[:name])
     File.delete(rcfile) if File.exists?(rcfile)
   end
 
   # if the service file exists in rc.conf.d then it's already enabled
   def enabled?
-    rcfile = File.join(@@rcconf_dir, @model[:name])
+    rcfile = File.join(rcconf_dir, @model[:name])
     return :true if File.exists?(rcfile)
 
     :false
@@ -31,8 +34,8 @@ Puppet::Type.type(:service).provide :bsd, :parent => :init do
   # enable service by creating a service file under rc.conf.d with the
   # proper contents
   def enable
-    Dir.mkdir(@@rcconf_dir) if not File.exists?(@@rcconf_dir)
-    rcfile = File.join(@@rcconf_dir, @model[:name])
+    Dir.mkdir(rcconf_dir) if not File.exists?(rcconf_dir)
+    rcfile = File.join(rcconf_dir, @model[:name])
     open(rcfile, 'w') { |f| f << "%s_enable=\"YES\"\n" % @model[:name] }
   end
 

@@ -1,17 +1,18 @@
-#!/usr/bin/env ruby
+#! /usr/bin/env ruby
+require 'spec_helper'
 
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
-
-require 'puppet/resource/type_collection'
-require 'puppet/util/rdoc/parser'
-require 'puppet/util/rdoc'
-require 'puppet/util/rdoc/code_objects'
-require 'rdoc/options'
-require 'rdoc/rdoc'
-
-describe RDoc::Parser do
+describe "RDoc::Parser", :if => Puppet.features.rdoc1? do
   require 'puppet_spec/files'
   include PuppetSpec::Files
+
+  before :all do
+    require 'puppet/resource/type_collection'
+    require 'puppet/util/rdoc/parser'
+    require 'puppet/util/rdoc'
+    require 'puppet/util/rdoc/code_objects'
+    require 'rdoc/options'
+    require 'rdoc/rdoc'
+  end
 
   before :each do
     tmpdir = tmpfile('rdoc_parser_tmp')

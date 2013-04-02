@@ -1,51 +1,43 @@
 module Puppet
   Puppet::Type.type(:file).newproperty(:owner) do
+    include Puppet::Util::Warnings
 
-    desc "To whom the file should belong.  Argument can be user name or
-      user ID."
-    @event = :file_changed
+    desc <<-EOT
+      The user to whom the file should belong.  Argument can be a user name or a
+      user ID.
+
+      On Windows, a group (such as "Administrators") can be set as a file's owner
+      and a user (such as "Administrator") can be set as a file's group; however,
+      a file's owner and group shouldn't be the same. (If the owner is also
+      the group, files with modes like `0640` will cause log churn, as they
+      will always appear out of sync.)
+    EOT
 
     def insync?(current)
-      provider.is_owner_insync?(current, @should)
+      # We don't want to validate/munge users until we actually start to
+      # evaluate this property, because they might be added during the catalog
+      # apply.
+      @should.map! do |val|
+        provider.name2uid(val) or raise "Could not find user #{val}"
+      end
+
+      return true if @should.include?(current)
+
+      unless Puppet.features.root?
+        warnonce "Cannot manage ownership unless running as root"
+        return true
+      end
+
+      false
     end
 
     # We want to print names, not numbers
     def is_to_s(currentvalue)
-      provider.id2name(currentvalue) || currentvalue
+      provider.uid2name(currentvalue) || currentvalue
     end
 
-    def should_to_s(newvalue = @should)
-      case newvalue
-      when Symbol
-        newvalue.to_s
-      when Integer
-        provider.id2name(newvalue) || newvalue
-      when String
-        newvalue
-      else
-        raise Puppet::DevError, "Invalid uid type #{newvalue.class}(#{newvalue})"
-      end
-    end
-
-    def retrieve
-      if self.should
-        @should = @should.collect do |val|
-          unless val.is_a?(Integer)
-            if tmp = provider.validuser?(val)
-              val = tmp
-            else
-              raise "Could not find user #{val}"
-            end
-          else
-            val
-          end
-        end
-      end
-      provider.retrieve(@resource)
-    end
-
-    def sync
-      provider.sync(resource[:path], resource[:links], @should)
+    def should_to_s(newvalue)
+      provider.uid2name(newvalue) || newvalue
     end
   end
 end

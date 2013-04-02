@@ -1,9 +1,5 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2008-3-7.
-#  Copyright (c) 2007. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/indirector/certificate_revocation_list/file'
 
@@ -13,8 +9,9 @@ describe Puppet::SSL::CertificateRevocationList::File do
   end
 
   it "should always store the file to :hostcrl location" do
-    Puppet.settings.expects(:value).with(:hostcrl).returns "/host/crl"
+    crl = File.expand_path("/host/crl")
+    Puppet[:hostcrl] = crl
     Puppet.settings.stubs(:use)
-    Puppet::SSL::CertificateRevocationList::File.file_location.should == "/host/crl"
+    Puppet::SSL::CertificateRevocationList::File.file_location.should == crl
   end
 end

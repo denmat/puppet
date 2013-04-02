@@ -1,13 +1,13 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/parser/files'
 
 describe Puppet::Parser::Files do
+  include PuppetSpec::Files
 
   before do
-    @basepath = Puppet.features.posix? ? "/somepath" : "C:/somepath"
+    @basepath = make_absolute("/somepath")
   end
 
   it "should have a method for finding a template" do
@@ -33,11 +33,11 @@ describe Puppet::Parser::Files do
     end
 
     it "should return the file in the templatedir if it exists" do
-      Puppet.settings.expects(:value).with(:templatedir, nil).returns("/my/templates")
+      Puppet[:templatedir] = "/my/templates"
       Puppet[:modulepath] = "/one:/two"
       File.stubs(:directory?).returns(true)
       FileTest.stubs(:exist?).returns(true)
-      Puppet::Parser::Files.find_template("mymod/mytemplate").should == "/my/templates/mymod/mytemplate"
+      Puppet::Parser::Files.find_template("mymod/mytemplate").should == File.join(Puppet[:templatedir], "mymod/mytemplate")
     end
 
     it "should not raise an error if no valid templatedir exists and the template exists in a module" do
@@ -78,8 +78,9 @@ describe Puppet::Parser::Files do
     it "should accept relative templatedirs" do
       FileTest.stubs(:exist?).returns true
       Puppet[:templatedir] = "my/templates"
-      File.expects(:directory?).with(File.join(Dir.getwd,"my/templates")).returns(true)
-      Puppet::Parser::Files.find_template("mytemplate").should == File.join(Dir.getwd,"my/templates/mytemplate")
+      # We expand_path to normalize backslashes and slashes on Windows
+      File.expects(:directory?).with(File.expand_path(File.join(Dir.getwd,"my/templates"))).returns(true)
+      Puppet::Parser::Files.find_template("mytemplate").should == File.expand_path(File.join(Dir.getwd,"my/templates/mytemplate"))
     end
 
     it "should use the environment templatedir if no module is found and an environment is specified" do
@@ -155,11 +156,15 @@ describe Puppet::Parser::Files do
     it "should match against provided fully qualified patterns" do
       pattern = @basepath + "/fully/qualified/pattern/*"
       Dir.expects(:glob).with(pattern+'{.pp,.rb}').returns(%w{my file list})
+      ['my', 'file','list'].each do |w|
+        FileTest.expects(:'directory?').with(w).returns false
+      end
       Puppet::Parser::Files.find_manifests(pattern)[1].should == %w{my file list}
     end
 
     it "should look for files relative to the current directory" do
-      cwd = Dir.getwd
+      # We expand_path to normalize backslashes and slashes on Windows
+      cwd = File.expand_path(Dir.getwd)
       Dir.expects(:glob).with("#{cwd}/foobar/init.pp").returns(["#{cwd}/foobar/init.pp"])
       Puppet::Parser::Files.find_manifests("foobar/init.pp")[1].should == ["#{cwd}/foobar/init.pp"]
     end
@@ -182,20 +187,30 @@ describe Puppet::Parser::Files do
   end
 
   describe "when searching for manifests in a found module" do
+    def a_module_in_environment(env, name)
+      mod = Puppet::Module.new(name, "/one/#{name}", env)
+      env.stubs(:module).with(name).returns mod
+      mod.stubs(:match_manifests).with("init.pp").returns(["/one/#{name}/manifests/init.pp"])
+    end
+
     it "should return the name of the module and the manifests from the first found module" do
-      mod = Puppet::Module.new("mymod")
-      Puppet::Node::Environment.new.expects(:module).with("mymod").returns mod
-      mod.expects(:match_manifests).with("init.pp").returns(%w{/one/mymod/manifests/init.pp})
-      Puppet::Parser::Files.find_manifests("mymod/init.pp").should == ["mymod", ["/one/mymod/manifests/init.pp"]]
+      a_module_in_environment(Puppet::Node::Environment.new, "mymod")
+
+      Puppet::Parser::Files.find_manifests("mymod/init.pp").should ==
+        ["mymod", ["/one/mymod/manifests/init.pp"]]
     end
 
     it "should use the node environment if specified" do
-      mod = Puppet::Module.new("mymod")
-      Puppet::Node::Environment.new("myenv").expects(:module).with("mymod").returns mod
-      mod.expects(:match_manifests).with("init.pp").returns(%w{/one/mymod/manifests/init.pp})
-      Puppet::Parser::Files.find_manifests("mymod/init.pp", :environment => "myenv")[1].should == ["/one/mymod/manifests/init.pp"]
+      a_module_in_environment(Puppet::Node::Environment.new("myenv"), "mymod")
+
+      Puppet::Parser::Files.find_manifests("mymod/init.pp", :environment => "myenv").should ==
+        ["mymod", ["/one/mymod/manifests/init.pp"]]
     end
 
-    after { Puppet.settings.clear }
+    it "does not find the module when it is a different environment" do
+      a_module_in_environment(Puppet::Node::Environment.new("myenv"), "mymod")
+
+      Puppet::Parser::Files.find_manifests("mymod/init.pp", :environment => "different").should_not include("mymod")
+    end
   end
 end

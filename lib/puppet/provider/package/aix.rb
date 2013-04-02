@@ -2,7 +2,7 @@ require 'puppet/provider/package'
 require 'puppet/util/package'
 
 Puppet::Type.type(:package).provide :aix, :parent => Puppet::Provider::Package do
-  desc "Installation from AIX Software directory"
+  desc "Installation from the AIX software directory."
 
   # The commands we are using on an AIX box are installed standard
   # (except nimclient) nimclient needs the bos.sysmgt.nim.client fileset.
@@ -30,7 +30,7 @@ Puppet::Type.type(:package).provide :aix, :parent => Puppet::Provider::Package d
 
     updates = {}
     sources.each do |source|
-      execute(self.srclistcmd(source)).each do |line|
+      execute(self.srclistcmd(source)).each_line do |line|
         if line =~ /^[^#][^:]*:([^:]*):([^:]*)/
           current = {}
           current[:name]    = $1

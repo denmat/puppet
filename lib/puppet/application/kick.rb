@@ -2,8 +2,6 @@ require 'puppet/application'
 
 class Puppet::Application::Kick < Puppet::Application
 
-  should_not_parse_config
-
   attr_accessor :hosts, :tags, :classes
 
   option("--all","-a")
@@ -11,6 +9,7 @@ class Puppet::Application::Kick < Puppet::Application
   option("--debug","-d")
   option("--ping","-P")
   option("--test")
+  option("--ignoreschedules")
 
   option("--host HOST") do |arg|
     @hosts << arg
@@ -38,7 +37,7 @@ class Puppet::Application::Kick < Puppet::Application
   end
 
   def help
-    <<-HELP
+    <<-'HELP'
 
 puppet-kick(8) -- Remotely control puppet agent
 ========
@@ -76,31 +75,30 @@ copy things like LDAP settings.
 
 USAGE NOTES
 -----------
-'puppet kick' is useless unless 'puppet agent' is listening. See its
-documentation for more information, but the gist is that you must enable
-'listen' on the 'puppet agent' daemon, either using '--listen' on the
-command line or adding 'listen = true' in its config file. In addition,
-you need to set the daemons up to specifically allow connections by
-creating the 'namespaceauth' file, normally at
-'/etc/puppet/namespaceauth.conf'. This file specifies who has access to
-each namespace; if you create the file you must add every namespace you
-want any Puppet daemon to allow -- it is currently global to all Puppet
-daemons.
+Puppet kick needs the puppet agent on the target machine to be running as a
+daemon, be configured to listen for incoming network connections, and have an
+appropriate security configuration.
 
-An example file looks like this:
+The specific changes required are:
 
-    [fileserver]
-        allow *.madstop.com
+* Set `listen = true` in the agent's `puppet.conf` file (or `--listen` on the
+  command line)
+* Configure the node's firewall to allow incoming connections on port 8139
+* Insert the following stanza at the top of the node's `auth.conf` file:
 
-    [puppetmaster]
-        allow *.madstop.com
+        # Allow puppet kick access
+        path    /run
+        method  save
+        auth    any
+        allow   workstation.example.com
 
-    [puppetrunner]
-        allow culain.madstop.com
+This example would allow the machine `workstation.example.com` to trigger a
+Puppet run; adjust the "allow" directive to suit your site. You may also use
+`allow *` to allow anyone to trigger a Puppet run, but that makes it possible
+to interfere with your site by triggering excessive Puppet runs.
 
-This is what you would install on your Puppet master; non-master hosts
-could leave off the 'fileserver' and 'puppetmaster' namespaces.
-
+See `http://docs.puppetlabs.com/guides/rest_auth_conf.html` for more details
+about security settings.
 
 OPTIONS
 -------
@@ -147,6 +145,9 @@ with '--genconfig'.
   forking for each client to which to connect. The default is 1, meaning
   serial execution.
 
+* --puppetport:
+  Use the specified TCP port to connect to agents. Defaults to 8139.
+
 * --tag:
   Specify a tag for selecting the objects to apply. Does not work with
   the --test option.
@@ -172,8 +173,7 @@ Luke Kanies
 
 COPYRIGHT
 ---------
-Copyright (c) 2005 Puppet Labs, LLC Licensed under the GNU Public
-License
+Copyright (c) 2011 Puppet Labs, LLC Licensed under the Apache 2.0 License
 
     HELP
   end
@@ -189,8 +189,6 @@ License
   end
 
   def main
-    require 'puppet/network/client'
-
     Puppet.warning "Failed to load ruby LDAP library. LDAP functionality will not be available" unless Puppet.features.ldap?
     require 'puppet/util/ldap/connection'
 
@@ -205,7 +203,7 @@ License
       # do, then do the next host.
       if @children.length < options[:parallel] and ! todo.empty?
         host = todo.shift
-        pid = fork do
+        pid = safe_posix_fork do
           run_for_host(host)
         end
         @children[pid] = host
@@ -266,8 +264,7 @@ License
       result = run.status
       puts "status is #{result}"
     rescue => detail
-      puts detail.backtrace if Puppet[:trace]
-      $stderr.puts "Host #{host} failed: #{detail}\n"
+      Puppet.log_exception(detail, "Host #{host} failed: #{detail}\n")
       exit(2)
     end
 
@@ -305,16 +302,17 @@ License
   end
 
   def setup
+    super()
+    raise Puppet::Error.new("Puppet kick is not supported on Microsoft Windows") if Puppet.features.microsoft_windows?
+    Puppet.warning "Puppet kick is deprecated. See http://links.puppetlabs.com/puppet-kick-deprecation"
+
     if options[:debug]
       Puppet::Util::Log.level = :debug
     else
       Puppet::Util::Log.level = :info
     end
 
-    # Now parse the config
-    Puppet.parse_config
-
-    if Puppet[:node_terminus] == "ldap" and (options[:all] or @classes)
+    if Puppet[:node_terminus] == :ldap and (options[:all] or @classes)
       if options[:all]
         @hosts = Puppet::Node.indirection.search("whatever", :fqdn => options[:fqdn]).collect { |node| node.name }
         puts "all: #{@hosts.join(", ")}"

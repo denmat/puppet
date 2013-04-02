@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/resource/catalog'
 
@@ -10,11 +9,8 @@ describe Puppet::Resource::Catalog::Compiler do
   before do
     Facter.stubs(:value).returns "something"
     @catalog = Puppet::Resource::Catalog.new
-
-    @one = Puppet::Resource.new(:file, "/one")
-
-    @two = Puppet::Resource.new(:file, "/two")
-    @catalog.add_resource(@one, @two)
+    @catalog.add_resource(@one = Puppet::Resource.new(:file, "/one"))
+    @catalog.add_resource(@two = Puppet::Resource.new(:file, "/two"))
   end
 
   after { Puppet.settings.clear }

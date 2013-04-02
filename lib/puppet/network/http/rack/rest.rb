@@ -1,5 +1,7 @@
+require 'openssl'
 require 'puppet/network/http/handler'
 require 'puppet/network/http/rack/httphandler'
+require 'puppet/util/ssl'
 
 class Puppet::Network::HTTP::RackREST < Puppet::Network::HTTP::RackHttpHandler
 
@@ -73,21 +75,37 @@ class Puppet::Network::HTTP::RackREST < Puppet::Network::HTTP::RackHttpHandler
   end
 
   # return the request body
-  # request.body has some limitiations, so we need to concat it back
-  # into a regular string, which is something puppet can use.
   def body(request)
     request.body.read
+  end
+
+  def client_cert(request)
+    # This environment variable is set by mod_ssl, note that it
+    # requires the `+ExportCertData` option in the `SSLOptions` directive
+    cert = request.env['SSL_CLIENT_CERT']
+    # NOTE: The SSL_CLIENT_CERT environment variable will be the empty string
+    # when Puppet agent nodes have not yet obtained a signed certificate.
+    return nil if cert.nil? or cert.empty?
+    OpenSSL::X509::Certificate.new(cert)
+  end
+
+  # Passenger freaks out if we finish handling the request without reading any
+  # part of the body, so make sure we have.
+  def cleanup(request)
+    request.body.read(1)
+    nil
   end
 
   def extract_client_info(request)
     result = {}
     result[:ip] = request.ip
 
-    # if we find SSL info in the headers, use them to get a hostname.
+    # if we find SSL info in the headers, use them to get a hostname from the CN.
     # try this with :ssl_client_header, which defaults should work for
     # Apache with StdEnvVars.
-    if dn = request.env[Puppet[:ssl_client_header]] and dn_matchdata = dn.match(/^.*?CN\s*=\s*(.*)/)
-      result[:node] = dn_matchdata[1].to_str
+    if subj_str = request.env[Puppet[:ssl_client_header]]
+      subject = Puppet::Util::SSL.subject_from_dn(subj_str)
+      result[:node] = Puppet::Util::SSL.cn_from_subject(subject)
       result[:authenticated] = (request.env[Puppet[:ssl_client_verify_header]] == 'SUCCESS')
     else
       result[:node] = resolve_node(result)

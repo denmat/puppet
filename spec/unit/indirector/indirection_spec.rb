@@ -1,14 +1,13 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/indirector/indirection'
 
 shared_examples_for "Indirection Delegator" do
   it "should create a request object with the appropriate method name and all of the passed arguments" do
-    request = Puppet::Indirector::Request.new(:indirection, :find, "me")
+    request = Puppet::Indirector::Request.new(:indirection, :find, "me", nil)
 
-    @indirection.expects(:request).with(@method, "mystuff", :one => :two).returns request
+    @indirection.expects(:request).with(@method, "mystuff", nil, :one => :two).returns request
 
     @terminus.stubs(@method)
 
@@ -22,7 +21,7 @@ shared_examples_for "Indirection Delegator" do
       end
     end
 
-    request = Puppet::Indirector::Request.new(:indirection, :find, "me")
+    request = Puppet::Indirector::Request.new(:indirection, :find, "me", nil)
 
     @indirection.stubs(:request).returns request
 
@@ -41,7 +40,7 @@ shared_examples_for "Indirection Delegator" do
       end
     end
 
-    request = stub 'request', :key => "me", :options => {}
+    request = Puppet::Indirector::Request.new(:indirection, :find, "me", nil)
 
     @indirection.stubs(:request).returns request
 
@@ -102,10 +101,17 @@ shared_examples_for "Delegation Authorizer" do
   end
 end
 
-describe Puppet::Indirector::Indirection do
-  after do
-    Puppet::Util::Cacher.expire
+shared_examples_for "Request validator" do
+  it "asks the terminus to validate the request" do
+    @terminus.expects(:validate).raises(Puppet::Indirector::ValidationError, "Invalid")
+    @terminus.expects(@method).never
+    expect {
+      @indirection.send(@method, "key")
+    }.to raise_error Puppet::Indirector::ValidationError
   end
+end
+
+describe Puppet::Indirector::Indirection do
   describe "when initializing" do
     # (LAK) I've no idea how to test this, really.
     it "should store a reference to itself before it consumes its options" do
@@ -145,6 +151,7 @@ describe Puppet::Indirector::Indirection do
     before :each do
       @terminus_class = mock 'terminus_class'
       @terminus = mock 'terminus'
+      @terminus.stubs(:validate)
       @terminus_class.stubs(:new).returns(@terminus)
       @cache = stub 'cache', :name => "mycache"
       @cache_class = mock 'cache_class'
@@ -167,7 +174,7 @@ describe Puppet::Indirector::Indirection do
     end
 
     it "should default to the :runinterval setting, converted to an integer, for its ttl" do
-      Puppet.settings.expects(:value).returns "1800"
+      Puppet[:runinterval] = 1800
       @indirection.ttl.should == 1800
     end
 
@@ -215,10 +222,16 @@ describe Puppet::Indirector::Indirection do
 
       it_should_behave_like "Indirection Delegator"
       it_should_behave_like "Delegation Authorizer"
+      it_should_behave_like "Request validator"
 
       it "should return the results of the delegation" do
         @terminus.expects(:find).returns(@instance)
         @indirection.find("me").should equal(@instance)
+      end
+
+      it "should return false if the instance is false" do
+        @terminus.expects(:find).returns(false)
+        @indirection.find("me").should equal(false)
       end
 
       it "should set the expiration date on any instances without one set" do
@@ -388,6 +401,7 @@ describe Puppet::Indirector::Indirection do
 
       it_should_behave_like "Indirection Delegator"
       it_should_behave_like "Delegation Authorizer"
+      it_should_behave_like "Request validator"
 
       it "should return true if the head method returned true" do
         @terminus.expects(:head).returns(true)
@@ -505,6 +519,7 @@ describe Puppet::Indirector::Indirection do
 
       it_should_behave_like "Indirection Delegator"
       it_should_behave_like "Delegation Authorizer"
+      it_should_behave_like "Request validator"
 
       it "should return the result of removing the instance" do
         @terminus.stubs(:destroy).returns "yayness"
@@ -523,8 +538,8 @@ describe Puppet::Indirector::Indirection do
           destroy = stub 'destroy_request', :key => "/my/key", :node => nil
           find = stub 'destroy_request', :key => "/my/key", :node => nil
 
-          @indirection.expects(:request).with(:destroy, "/my/key").returns destroy
-          @indirection.expects(:request).with(:find, "/my/key").returns find
+          @indirection.expects(:request).with(:destroy, "/my/key", nil, optionally(instance_of(Hash))).returns destroy
+          @indirection.expects(:request).with(:find, "/my/key", nil, optionally(instance_of(Hash))).returns find
 
           cached = mock 'cache'
 
@@ -543,6 +558,7 @@ describe Puppet::Indirector::Indirection do
 
       it_should_behave_like "Indirection Delegator"
       it_should_behave_like "Delegation Authorizer"
+      it_should_behave_like "Request validator"
 
       it "should set the expiration date on any instances without one set" do
         @terminus.stubs(:search).returns([@instance])
@@ -644,7 +660,6 @@ describe Puppet::Indirector::Indirection do
 
     after :each do
       @indirection.delete
-      Puppet::Util::Cacher.expire
     end
   end
 
@@ -693,8 +708,8 @@ describe Puppet::Indirector::Indirection do
 
     it "should use the provided Puppet setting if told to do so" do
       Puppet::Indirector::Terminus.stubs(:terminus_class).with(:test, :my_terminus).returns(mock("terminus_class2"))
-      Puppet.settings.expects(:value).with(:my_setting).returns("my_terminus")
-      @indirection.terminus_setting = :my_setting
+      Puppet[:node_terminus] = :my_terminus
+      @indirection.terminus_setting = :node_terminus
       @indirection.terminus_class.should equal(:my_terminus)
     end
 
@@ -712,6 +727,7 @@ describe Puppet::Indirector::Indirection do
     before do
       @indirection = Puppet::Indirector::Indirection.new(mock('model'), :test)
       @terminus = mock 'terminus'
+      @terminus.stubs(:validate)
       @terminus_class = stub 'terminus class', :new => @terminus
     end
 
@@ -821,7 +837,6 @@ describe Puppet::Indirector::Indirection do
 
   describe "when using a cache" do
     before :each do
-      Puppet.settings.stubs(:value).with("test_terminus").returns("test_terminus")
       @terminus_class = mock 'terminus_class'
       @terminus = mock 'terminus'
       @terminus_class.stubs(:new).returns(@terminus)
@@ -841,7 +856,6 @@ describe Puppet::Indirector::Indirection do
 
       it "should reuse the cache terminus" do
         @cache_class.expects(:new).returns(@cache)
-        Puppet.settings.stubs(:value).with("test_cache").returns("cache_terminus")
         @indirection.cache_class = :cache_terminus
         @indirection.cache.should equal(@cache)
         @indirection.cache.should equal(@cache)

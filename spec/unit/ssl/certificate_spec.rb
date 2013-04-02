@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/ssl/certificate'
 
@@ -27,13 +26,15 @@ describe Puppet::SSL::Certificate do
 
   describe "when converting from a string" do
     it "should create a certificate instance with its name set to the certificate subject and its content set to the extracted certificate" do
-      cert = stub 'certificate', :subject => "/CN=Foo.madstop.com"
+      cert = stub 'certificate',
+        :subject => OpenSSL::X509::Name.parse("/CN=Foo.madstop.com"),
+        :is_a? => true
       OpenSSL::X509::Certificate.expects(:new).with("my certificate").returns(cert)
 
       mycert = stub 'sslcert'
       mycert.expects(:content=).with(cert)
 
-      @class.expects(:new).with("foo.madstop.com").returns mycert
+      @class.expects(:new).with("Foo.madstop.com").returns mycert
 
       @class.from_s("my certificate")
     end
@@ -90,6 +91,37 @@ describe Puppet::SSL::Certificate do
       @certificate.should respond_to(:content)
     end
 
+    describe "#subject_alt_names" do
+      it "should list all alternate names when the extension is present" do
+        key = Puppet::SSL::Key.new('quux')
+        key.generate
+
+        csr = Puppet::SSL::CertificateRequest.new('quux')
+        csr.generate(key, :dns_alt_names => 'foo, bar,baz')
+
+        raw_csr = csr.content
+
+        cert = Puppet::SSL::CertificateFactory.build('server', csr, raw_csr, 14)
+        certificate = @class.from_s(cert.to_pem)
+        certificate.subject_alt_names.
+          should =~ ['DNS:foo', 'DNS:bar', 'DNS:baz', 'DNS:quux']
+      end
+
+      it "should return an empty list of names if the extension is absent" do
+        key = Puppet::SSL::Key.new('quux')
+        key.generate
+
+        csr = Puppet::SSL::CertificateRequest.new('quux')
+        csr.generate(key)
+
+        raw_csr = csr.content
+
+        cert = Puppet::SSL::CertificateFactory.build('client', csr, raw_csr, 14)
+        certificate = @class.from_s(cert.to_pem)
+        certificate.subject_alt_names.should be_empty
+      end
+    end
+
     it "should return a nil expiration if there is no actual certificate" do
       @certificate.stubs(:content).returns nil
 
@@ -119,6 +151,30 @@ describe Puppet::SSL::Certificate do
       real_certificate.expects(:to_text).returns "certificatetext"
       @certificate.content = real_certificate
       @certificate.to_text.should == "certificatetext"
+    end
+  end
+
+  describe "when checking if the certificate's expiration is approaching" do
+    before do
+      @days = 24*60*60
+      @certificate = @class.new("myname")
+      @certificate.stubs(:expiration).returns(Time.now.utc() + 30*@days)
+    end
+
+    it "should be true if the expiration is within the given interval from now" do
+      @certificate.near_expiration?(31*@days).should be_true
+    end
+
+    it "should be false if there is no expiration" do
+      @certificate.stubs(:expiration).returns(nil)
+      @certificate.near_expiration?.should be_false
+    end
+
+    it "should default to using the `certificate_expire_warning` setting as the interval" do
+      Puppet[:certificate_expire_warning] = 31*@days
+      @certificate.near_expiration?.should be_true
+      Puppet[:certificate_expire_warning] = 29*@days
+      @certificate.near_expiration?.should be_false
     end
   end
 end

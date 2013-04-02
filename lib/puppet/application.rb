@@ -1,4 +1,10 @@
 require 'optparse'
+require 'puppet/util/command_line'
+require 'puppet/util/plugins'
+require 'puppet/util/constant_inflector'
+require 'puppet/error'
+
+module Puppet
 
 # This class handles all the aspects of a Puppet application/executable
 # * setting up options
@@ -113,12 +119,14 @@ require 'optparse'
 #          process_member(member)
 #      end
 #  end
-module Puppet
 class Application
   require 'puppet/util'
   include Puppet::Util
 
-  DOCPATTERN = File.expand_path(File.dirname(__FILE__) + "/util/command_line/*" )
+  DOCPATTERN = ::File.expand_path(::File.dirname(__FILE__) + "/util/command_line/*" )
+  CommandLineArgs = Struct.new(:subcommand_name, :args)
+
+  @loader = Puppet::Util::Autoload.new(self, 'puppet/application')
 
   class << self
     include Puppet::Util
@@ -173,23 +181,27 @@ class Application
       result
     end
 
+    SHOULD_PARSE_CONFIG_DEPRECATION_MSG = "is no longer supported; config file parsing " +
+        "is now controlled by the puppet engine, rather than by individual applications.  This " +
+        "method will be removed in a future version of puppet."
+
     def should_parse_config
-      @parse_config = true
+      Puppet.deprecation_warning("should_parse_config " + SHOULD_PARSE_CONFIG_DEPRECATION_MSG)
     end
 
     def should_not_parse_config
-      @parse_config = false
+      Puppet.deprecation_warning("should_not_parse_config " + SHOULD_PARSE_CONFIG_DEPRECATION_MSG)
     end
 
     def should_parse_config?
-      @parse_config = true if ! defined?(@parse_config)
-      @parse_config
+      Puppet.deprecation_warning("should_parse_config? " + SHOULD_PARSE_CONFIG_DEPRECATION_MSG)
+      true
     end
 
     # used to declare code that handle an option
     def option(*options, &block)
       long = options.find { |opt| opt =~ /^--/ }.gsub(/^--(?:\[no-\])?([^ =]+).*$/, '\1' ).gsub('-','_')
-      fname = symbolize("handle_#{long}")
+      fname = "handle_#{long}".intern
       if (block_given?)
         define_method(fname, &block)
       else
@@ -211,19 +223,62 @@ class Application
       @option_parser_commands
     end
 
-    def find(name)
-      klass = name.to_s.capitalize
+    # @return [Array<String>] the names of available applications
+    # @api public
+    def available_application_names
+      @loader.files_to_load.map do |fn|
+        ::File.basename(fn, '.rb')
+      end.uniq
+    end
 
-      # const_defined? is used before const_get since const_defined? will only
-      # check within our namespace, whereas const_get will check ancestor
-      # trees as well, resulting in unexpected behaviour.
-      if !self.const_defined?(klass)
-        puts "Unable to find application '#{name.to_s}'."
-        Kernel::exit(1)
+    # Finds the class for a given application and loads the class. This does
+    # not create an instance of the application, it only gets a handle to the
+    # class. The code for the application is expected to live in a ruby file
+    # `puppet/application/#{name}.rb` that is available on the `$LOAD_PATH`.
+    #
+    # @param application_name [String] the name of the application to find (eg. "apply").
+    # @return [Class] the Class instance of the application that was found.
+    # @raise [Puppet::Error] if the application class was not found.
+    # @raise [LoadError] if there was a problem loading the application file.
+    # @api public
+    def find(application_name)
+      begin
+        require @loader.expand(application_name.to_s.downcase)
+      rescue LoadError => e
+        Puppet.log_and_raise(e, "Unable to find application '#{application_name}'. #{e}")
       end
 
-      self.const_get(klass)
+      class_name = Puppet::Util::ConstantInflector.file2constant(application_name.to_s)
+
+      clazz = try_load_class(class_name)
+
+      ################################################################
+      #### Begin 2.7.x backward compatibility hack;
+      ####  eventually we need to issue a deprecation warning here,
+      ####  and then get rid of this stanza in a subsequent release.
+      ################################################################
+      if (clazz.nil?)
+        class_name = application_name.capitalize
+        clazz = try_load_class(class_name)
+      end
+      ################################################################
+      #### End 2.7.x backward compatibility hack
+      ################################################################
+
+      if clazz.nil?
+        raise Puppet::Error.new("Unable to load application class '#{class_name}' from file 'puppet/application/#{application_name}.rb'")
+      end
+
+      return clazz
     end
+
+    # Given the fully qualified name of a class, attempt to get the class instance.
+    # @param [String] class_name the fully qualified name of the class to try to load
+    # @return [Class] the Class instance, or nil? if it could not be loaded.
+    def try_load_class(class_name)
+        return self.const_defined?(class_name) ? const_get(class_name) : nil
+    end
+    private :try_load_class
 
     def [](name)
       find(name).new
@@ -233,16 +288,27 @@ class Application
     # passed. Otherwise, gets the run_mode or a default run_mode
     #
     def run_mode( mode_name = nil)
+      if mode_name
+        Puppet.settings.preferred_run_mode = mode_name
+      end
+
       return @run_mode if @run_mode and not mode_name
 
       require 'puppet/util/run_mode'
-      @run_mode = Puppet::Util::RunMode[ mode_name || :user ]
+      @run_mode = Puppet::Util::RunMode[ mode_name || Puppet.settings.preferred_run_mode ]
+    end
+
+    # This is for testing only
+    def clear_everything_for_tests
+      @run_mode = @banner = @run_status = @option_parser_commands = nil
     end
   end
 
   attr_reader :options, :command_line
 
   # Every app responds to --version
+  # See also `lib/puppet/util/command_line.rb` for some special case early
+  # handling of this.
   option("--version", "-V") do |arg|
     puts "#{Puppet.version}"
     exit
@@ -254,55 +320,48 @@ class Application
     exit
   end
 
-  def should_parse_config?
-    self.class.should_parse_config?
+  def app_defaults()
+    Puppet::Settings.app_defaults_for_run_mode(self.class.run_mode).merge(
+        :name => name
+    )
+  end
+
+  def initialize_app_defaults()
+    Puppet.settings.initialize_app_defaults(app_defaults)
   end
 
   # override to execute code before running anything else
   def preinit
   end
 
-  def initialize(command_line = nil)
-    require 'puppet/util/command_line'
-    @command_line = command_line || Puppet::Util::CommandLine.new
-    set_run_mode self.class.run_mode
+  def initialize(command_line = Puppet::Util::CommandLine.new)
+    @command_line = CommandLineArgs.new(command_line.subcommand_name, command_line.args.dup)
     @options = {}
+  end
+
+  # Execute the application.
+  # @api public
+  # @return [void]
+  def run
+
+    # I don't really like the names of these lifecycle phases.  It would be nice to change them to some more meaningful
+    # names, and make deprecated aliases.  Also, Daniel suggests that we can probably get rid of this "plugin_hook"
+    # pattern, but we need to check with PE and the community first.  --cprice 2012-03-16
+    #
+
+    exit_on_fail("get application-specific default settings") do
+      plugin_hook('initialize_app_defaults') { initialize_app_defaults }
+    end
 
     require 'puppet'
-  end
+    require 'puppet/util/instrumentation'
+    Puppet::Util::Instrumentation.init
 
-  # WARNING: This is a totally scary, frightening, and nasty internal API.  We
-  # strongly advise that you do not use this, and if you insist, we will
-  # politely allow you to keep both pieces of your broken code.
-  #
-  # We plan to provide a supported, long-term API to deliver this in a way
-  # that you can use.  Please make sure that you let us know if you do require
-  # this, and this message is still present in the code. --daniel 2011-02-03
-  def set_run_mode(mode)
-    @run_mode = mode
-    $puppet_application_mode = @run_mode
-    $puppet_application_name = name
-
-    if Puppet.respond_to? :settings
-      # This is to reduce the amount of confusion in rspec
-      # because it might have loaded defaults.rb before the globals were set
-      # and thus have the wrong defaults for the current application
-      Puppet.settings.set_value(:confdir, Puppet.run_mode.conf_dir, :mutable_defaults)
-      Puppet.settings.set_value(:vardir, Puppet.run_mode.var_dir, :mutable_defaults)
-      Puppet.settings.set_value(:name, Puppet.application_name.to_s, :mutable_defaults)
-      Puppet.settings.set_value(:logdir, Puppet.run_mode.logopts, :mutable_defaults)
-      Puppet.settings.set_value(:rundir, Puppet.run_mode.run_dir, :mutable_defaults)
-      Puppet.settings.set_value(:run_mode, Puppet.run_mode.name.to_s, :mutable_defaults)
-    end
-  end
-
-  # This is the main application entry point
-  def run
-    exit_on_fail("initialize") { preinit }
-    exit_on_fail("parse options") { parse_options }
-    exit_on_fail("parse configuration file") { Puppet.settings.parse } if should_parse_config?
-    exit_on_fail("prepare for execution") { setup }
-    exit_on_fail("run") { run_command }
+    exit_on_fail("initialize")                                   { plugin_hook('preinit')       { preinit } }
+    exit_on_fail("parse application options")                    { plugin_hook('parse_options') { parse_options } }
+    exit_on_fail("prepare for execution")                        { plugin_hook('setup')         { setup } }
+    exit_on_fail("configure routes from #{Puppet[:route_file]}") { configure_indirector_routes }
+    exit_on_fail("run")                                          { plugin_hook('run_command')   { run_command } }
   end
 
   def main
@@ -314,8 +373,11 @@ class Application
   end
 
   def setup
-    # Handle the logging settings
-    if options[:debug] or options[:verbose]
+    setup_logs
+  end
+
+  def setup_logs(is_daemon = false)
+    if options[:debug] or options[:verbose] or is_daemon
       Puppet::Util::Log.newdestination(:console)
       if options[:debug]
         Puppet::Util::Log.level = :debug
@@ -324,12 +386,27 @@ class Application
       end
     end
 
-    Puppet::Util::Log.newdestination(:syslog) unless options[:setdest]
+    Puppet::Util::Log.setup_default unless options[:setdest]
+  end
+
+  def configure_indirector_routes
+    route_file = Puppet[:route_file]
+    if ::File.exists?(route_file)
+      routes = YAML.load_file(route_file)
+      application_routes = routes[name.to_s]
+      Puppet::Indirector.configure_routes(application_routes) if application_routes
+    end
   end
 
   def parse_options
     # Create an option parser
     option_parser = OptionParser.new(self.class.banner)
+
+    # He're we're building up all of the options that the application may need to handle.  The main
+    # puppet settings defined in "defaults.rb" have already been parsed once (in command_line.rb) by
+    # the time we get here; however, our app may wish to handle some of them specially, so we need to
+    # make the parser aware of them again.  We might be able to make this a bit more efficient by
+    # re-using the parser object that gets built up in command_line.rb.  --cprice 2012-03-16
 
     # Add all global options to it.
     Puppet.settings.optparse_addargs([]).each do |option|
@@ -348,32 +425,15 @@ class Application
       end
     end
 
-    # scan command line.
-    begin
-      option_parser.parse!(self.command_line.args)
-    rescue OptionParser::ParseError => detail
-      $stderr.puts detail
-      $stderr.puts "Try 'puppet #{command_line.subcommand_name} --help'"
-      exit(1)
-    end
+    # Scan command line.  We just hand any exceptions to our upper levels,
+    # rather than printing help and exiting, so that we can meaningfully
+    # respond with context-sensitive help if we want to. --daniel 2011-04-12
+    option_parser.parse!(self.command_line.args)
   end
 
-  def handlearg(opt, arg)
-    # rewrite --[no-]option to --no-option if that's what was given
-    if opt =~ /\[no-\]/ and !arg
-      opt = opt.gsub(/\[no-\]/,'no-')
-    end
-    # otherwise remove the [no-] prefix to not confuse everybody
-    opt = opt.gsub(/\[no-\]/, '')
-    unless respond_to?(:handle_unknown) and send(:handle_unknown, opt, arg)
-      # Puppet.settings.handlearg doesn't handle direct true/false :-)
-      if arg.is_a?(FalseClass)
-        arg = "false"
-      elsif arg.is_a?(TrueClass)
-        arg = "true"
-      end
-      Puppet.settings.handlearg(opt, arg)
-    end
+  def handlearg(opt, val)
+    opt, val = Puppet::Settings.clean_opt(opt, val)
+    send(:handle_unknown, opt, val) if respond_to?(:handle_unknown)
   end
 
   # this is used for testing
@@ -389,14 +449,14 @@ class Application
     "No help available for puppet #{name}"
   end
 
-  private
 
-  def exit_on_fail(message, code = 1)
-      yield
-  rescue RuntimeError, NotImplementedError => detail
-      puts detail.backtrace if Puppet[:trace]
-      $stderr.puts "Could not #{message}: #{detail}"
-      exit(code)
+
+  def plugin_hook(step,&block)
+    Puppet::Plugins.send("before_application_#{step}",:application_object => self)
+    x = yield
+    Puppet::Plugins.send("after_application_#{step}",:application_object => self, :return_value => x)
+    x
   end
+  private :plugin_hook
 end
 end

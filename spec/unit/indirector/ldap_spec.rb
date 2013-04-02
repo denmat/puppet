@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/indirector/ldap'
 
@@ -8,10 +7,9 @@ describe Puppet::Indirector::Ldap do
   before do
     @indirection = stub 'indirection', :name => :testing
     Puppet::Indirector::Indirection.stubs(:instance).returns(@indirection)
-    @ldap_class = Class.new(Puppet::Indirector::Ldap) do
-      def self.to_s
-        "Testing::Mytype"
-      end
+    module Testing; end
+    @ldap_class = class Testing::MyLdap < Puppet::Indirector::Ldap
+      self
     end
 
     @connection = mock 'ldap'
@@ -51,7 +49,7 @@ describe Puppet::Indirector::Ldap do
     end
 
     it "should default to the value of the :search_base setting as the result of the ldapbase method" do
-      Puppet.expects(:[]).with(:ldapbase).returns("myldapbase")
+      Puppet[:ldapbase] = "myldapbase"
       searcher = @ldap_class.new
       searcher.search_base.should == "myldapbase"
     end

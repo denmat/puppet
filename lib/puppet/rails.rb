@@ -33,8 +33,9 @@ module Puppet::Rails
       Puppet.info "Connecting to #{args[:adapter]} database: #{args[:database]}"
       ActiveRecord::Base.establish_connection(args)
     rescue => detail
-      puts detail.backtrace if Puppet[:trace]
-      raise Puppet::Error, "Could not connect to database: #{detail}"
+      message = "Could not connect to database: #{detail}"
+      Puppet.log_exception(detail, message)
+      raise Puppet::Error, message
     end
   end
 
@@ -47,7 +48,7 @@ module Puppet::Rails
     case adapter
     when "sqlite3"
       args[:database] = Puppet[:dblocation]
-    when "mysql", "postgresql"
+    when "mysql", "mysql2", "postgresql"
       args[:host]     = Puppet[:dbserver] unless Puppet[:dbserver].to_s.empty?
       args[:port]     = Puppet[:dbport] unless Puppet[:dbport].to_s.empty?
       args[:username] = Puppet[:dbuser] unless Puppet[:dbuser].to_s.empty?
@@ -104,7 +105,8 @@ module Puppet::Rails
     begin
       ActiveRecord::Migrator.migrate(dbdir)
     rescue => detail
-      puts detail.backtrace if Puppet[:trace]
+      message = "Could not migrate database: #{detail}"
+      Puppet.log_exception(detail, message)
       raise Puppet::Error, "Could not migrate database: #{detail}"
     end
   end
@@ -118,7 +120,7 @@ module Puppet::Rails
     begin
       ActiveRecord::Base.establish_connection(database_arguments)
     rescue => detail
-      puts detail.backtrace if Puppet[:trace]
+      Puppet.log_exception(detail)
       raise Puppet::Error, "Could not connect to database: #{detail}"
     end
 

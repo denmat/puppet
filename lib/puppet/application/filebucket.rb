@@ -2,8 +2,6 @@ require 'puppet/application'
 
 class Puppet::Application::Filebucket < Puppet::Application
 
-  should_not_parse_config
-
   option("--bucket BUCKET","-b")
   option("--debug","-d")
   option("--local","-l")
@@ -13,7 +11,7 @@ class Puppet::Application::Filebucket < Puppet::Application
   attr :args
 
   def help
-    <<-HELP
+    <<-'HELP'
 
 puppet-filebucket(8) -- Store and retrieve files in a filebucket
 ========
@@ -108,8 +106,7 @@ Luke Kanies
 
 COPYRIGHT
 ---------
-Copyright (c) 2005 Puppet Labs, LLC Licensed under the GNU Public
-License
+Copyright (c) 2011 Puppet Labs, LLC Licensed under the Apache 2.0 License
 
     HELP
   end
@@ -129,6 +126,8 @@ License
   end
 
   def backup
+    raise "You must specify a file to back up" unless args.length > 0
+
     args.each do |file|
       unless FileTest.exists?(file)
         $stderr.puts "#{file}: no such file"
@@ -166,9 +165,6 @@ License
       Puppet::Log.level = :info
     end
 
-    # Now parse the config
-    Puppet.parse_config
-
       exit(Puppet.settings.print_configs ? 0 : 1) if Puppet.settings.print_configs?
 
     require 'puppet/file_bucket/dipper'
@@ -180,11 +176,9 @@ License
         @client = Puppet::FileBucket::Dipper.new(:Server => Puppet[:server])
       end
     rescue => detail
-      $stderr.puts detail
-      puts detail.backtrace if Puppet[:trace]
+      Puppet.log_exception(detail)
       exit(1)
     end
   end
-
 end
 

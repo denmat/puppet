@@ -1,9 +1,5 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2007-10-12.
-#  Copyright (c) 2007. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/reports'
 

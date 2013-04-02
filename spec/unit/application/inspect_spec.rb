@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.dirname(__FILE__) + '/../../spec_helper'
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/application/inspect'
 require 'puppet/resource/catalog'
@@ -13,6 +12,11 @@ describe Puppet::Application::Inspect do
 
   before :each do
     @inspect = Puppet::Application[:inspect]
+    @inspect.preinit
+  end
+
+  it "should operate in agent run_mode" do
+    @inspect.class.run_mode.name.should == :agent
   end
 
   describe "during setup" do
@@ -20,7 +24,7 @@ describe Puppet::Application::Inspect do
       Puppet[:configprint] = "all"
 
       Puppet.settings.expects(:print_configs).returns(true)
-      lambda { @inspect.setup }.should raise_error(SystemExit)
+      expect { @inspect.setup }.to exit_with 0
     end
 
     it "should fail if reporting is turned off" do
@@ -53,6 +57,7 @@ describe Puppet::Application::Inspect do
     it "should audit the specified properties" do
       catalog = Puppet::Resource::Catalog.new
       file = Tempfile.new("foo")
+      file.binmode
       file.puts("file contents")
       file.close
       resource = Puppet::Resource.new(:file, file.path, :parameters => {:audit => "all"})
@@ -99,6 +104,7 @@ describe Puppet::Application::Inspect do
       catalog = Puppet::Resource::Catalog.new
       file = Tempfile.new("foo")
       resource = Puppet::Resource.new(:file, file.path, :parameters => {:audit => "all"})
+      file.close
       file.delete
       catalog.add_resource(resource)
       Puppet::Resource::Catalog::Yaml.any_instance.stubs(:find).returns(catalog)
@@ -143,7 +149,7 @@ describe Puppet::Application::Inspect do
           @inspect.run_command
         end
 
-        it "should not send unreadable files" do
+        it "should not send unreadable files", :unless => Puppet.features.microsoft_windows? do
           File.open(@file, 'w') { |f| f.write('stuff') }
           File.chmod(0, @file)
           Puppet::FileBucketFile::Rest.any_instance.expects(:head).never
@@ -246,15 +252,16 @@ describe Puppet::Application::Inspect do
         @inspect.run_command
 
         @report.status.should == "failed"
-        @report.logs.select{|log| log.message =~ /Could not inspect/}.count.should == 1
-        @report.resource_statuses.count.should == 1
-        @report.resource_statuses['Stub_type[foo]'].events.count.should == 1
+        @report.logs.select{|log| log.message =~ /Could not inspect/}.size.should == 1
+        @report.resource_statuses.size.should == 1
+        @report.resource_statuses['Stub_type[foo]'].events.size.should == 1
 
         event = @report.resource_statuses['Stub_type[foo]'].events.first
         event.property.should == "content"
         event.status.should == "failure"
         event.audited.should == true
-        event.instance_variables.should_not include("@previous_value")
+        event.instance_variables.should_not include "@previous_value"
+        event.instance_variables.should_not include :@previous_value
       end
 
       it "should continue to the next resource" do
@@ -265,7 +272,7 @@ describe Puppet::Application::Inspect do
 
         @inspect.run_command
 
-        @report.resource_statuses.count.should == 2
+        @report.resource_statuses.size.should == 2
         @report.resource_statuses.keys.should =~ ['Stub_type[foo]', 'Stub_type[bar]']
       end
     end

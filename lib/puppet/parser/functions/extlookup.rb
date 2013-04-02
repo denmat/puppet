@@ -3,6 +3,7 @@ require 'csv'
 module Puppet::Parser::Functions
   newfunction(:extlookup,
   :type => :rvalue,
+  :arity => -2,
   :doc => "This is a parser function to read data from external files, this version
 uses CSV files but the concept can easily be adjust for databases, yaml
 or any other queryable data source.
@@ -50,7 +51,7 @@ Now create the following data files in /etc/puppet/manifests/extdata:
 Now you can replace the case statement with the simple single line to achieve
 the exact same outcome:
 
-   $snmp_contact = extlookup(\"snmp_contact\")
+    $snmp_contact = extlookup(\"snmp_contact\")
 
 The above code shows some other features, you can use any fact or variable that
 is in scope by simply using %{varname} in your data files, you can return arrays
@@ -60,7 +61,7 @@ In the event that a variable is nowhere to be found a critical error will be rai
 that will prevent your manifest from compiling, this is to avoid accidentally putting
 in empty values etc.  You can however specify a default value:
 
-   $ntp_servers = extlookup(\"ntp_servers\", \"1.${country}.pool.ntp.org\")
+    $ntp_servers = extlookup(\"ntp_servers\", \"1.${country}.pool.ntp.org\")
 
 In this case it will default to \"1.${country}.pool.ntp.org\" if nothing is defined in
 any data file.
@@ -89,16 +90,11 @@ This is for back compatibility to interpolate variables with %. % interpolation 
   default  = args[1]
   datafile = args[2]
 
-  raise Puppet::ParseError, ("extlookup(): wrong number of arguments (#{args.length}; must be <= 3)") if args.length > 3
+  raise ArgumentError, ("extlookup(): wrong number of arguments (#{args.length}; must be <= 3)") if args.length > 3
 
-  extlookup_datadir = lookupvar('extlookup_datadir')
-  extlookup_precedence = Array.new
+  extlookup_datadir = undef_as('',self['::extlookup_datadir'])
 
-  extlookup_precedence = lookupvar('extlookup_precedence').collect do |var|
-    var.gsub(/%\{(.+?)\}/) do |capture|
-      lookupvar($1)
-    end
-  end
+  extlookup_precedence = undef_as([],self['::extlookup_precedence']).collect { |var| var.gsub(/%\{(.+?)\}/) { self["::#{$1}"] } }
 
   datafiles = Array.new
 
@@ -126,9 +122,9 @@ This is for back compatibility to interpolate variables with %. % interpolation 
           if result[0].length == 2
             val = result[0][1].to_s
 
-            # parse %{}'s in the CSV into local variables using lookupvar()
+            # parse %{}'s in the CSV into local variables using the current scope
             while val =~ /%\{(.+?)\}/
-              val.gsub!(/%\{#{$1}\}/, lookupvar($1))
+              val.gsub!(/%\{#{$1}\}/, self[$1])
             end
 
             desired = val
@@ -139,9 +135,9 @@ This is for back compatibility to interpolate variables with %. % interpolation 
             # Individual cells in a CSV result are a weird data type and throws
             # puppets yaml parsing, so just map it all to plain old strings
             desired = cells.map do |c|
-              # parse %{}'s in the CSV into local variables using lookupvar()
+              # parse %{}'s in the CSV into local variables using the current scope
               while c =~ /%\{(.+?)\}/
-                c.gsub!(/%\{#{$1}\}/, lookupvar($1))
+                c.gsub!(/%\{#{$1}\}/, self[$1])
               end
 
               c.to_s

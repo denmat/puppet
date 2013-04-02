@@ -2,36 +2,36 @@
 #
 # author Brice Figureau <brice-puppet@daysofwonder.com>
 Puppet::Type.type(:service).provide :runit, :parent => :daemontools do
-  desc "Runit service management.
+  desc <<-'EOT'
+    Runit service management.
 
-  This provider manages daemons running supervised by Runit.
-  It tries to detect the service directory, with by order of preference:
+    This provider manages daemons running supervised by Runit.
+    When detecting the service directory it will check, in order of preference:
 
-  * /service
-  * /var/service
-  * /etc/service
+    * `/service`
+    * `/var/service`
+    * `/etc/service`
 
-  The daemon directory should be placed in a directory that can be
-  by default in:
+    The daemon directory should be in one of the following locations:
 
-  * /etc/sv
+    * `/etc/sv`
 
-  or this can be overriden in the service resource parameters::
+    or this can be overriden in the service resource parameters::
 
-      service { \"myservice\":
-        provider => \"runit\",
-        path => \"/path/to/daemons\",
-      }
+        service { "myservice":
+          provider => "runit",
+          path => "/path/to/daemons",
+        }
 
-  This provider supports out of the box:
+    This provider supports out of the box:
 
-  * start/stop
-  * enable/disable
-  * restart
-  * status
+    * start/stop
+    * enable/disable
+    * restart
+    * status
 
 
-"
+  EOT
 
   commands :sv => "/usr/bin/sv"
 
@@ -83,7 +83,14 @@ Puppet::Type.type(:service).provide :runit, :parent => :daemontools do
   end
 
   def start
-    enable unless enabled? == :true
+    if enabled? != :true
+        enable
+        # Work around issue #4480
+        # runsvdir takes up to 5 seconds to recognize
+        # the symlink created by this call to enable
+        Puppet.info "Waiting 5 seconds for runsvdir to discover service #{self.service}"
+        sleep 5
+    end
     sv "start", self.service
   end
 

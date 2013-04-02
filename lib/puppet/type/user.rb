@@ -13,14 +13,17 @@ module Puppet
       This resource type uses the prescribed native tools for creating
       groups and generally uses POSIX APIs for retrieving information
       about them.  It does not directly modify `/etc/passwd` or anything.
-      
-      **Autorequires:** If Puppet is managing the user's primary group (as provided in the `gid` attribute), the user resource will autorequire that group. If Puppet is managing any role accounts corresponding to the user's roles, the user resource will autorequire those role accounts."
+
+      **Autorequires:** If Puppet is managing the user's primary group (as
+      provided in the `gid` attribute), the user resource will autorequire
+      that group. If Puppet is managing any role accounts corresponding to the
+      user's roles, the user resource will autorequire those role accounts."
 
     feature :allows_duplicates,
       "The provider supports duplicate users with the same UID."
 
     feature :manages_homedir,
-      "The provider can create and remove home directories."
+      "The provider can create, remove, and update home directories."
 
     feature :manages_passwords,
       "The provider can modify user passwords, by accepting a password
@@ -30,6 +33,10 @@ module Puppet
       "The provider can set age requirements and restrictions for
       passwords."
 
+    feature :manages_password_salt,
+      "The provider can set a password salt. This is for providers that
+       implement PBKDF2 passwords with salt properties."
+
     feature :manages_solaris_rbac,
       "The provider can manage roles and normal users"
 
@@ -38,6 +45,13 @@ module Puppet
 
    feature :system_users,
      "The provider allows you to create system users with lower UIDs."
+
+    feature :manages_aix_lam,
+      "The provider can manage AIX Loadable Authentication Module (LAM) system."
+
+    feature :libuser,
+      "Allows local users to be managed on systems that also use some other
+       remote NSS method of managing accounts."
 
     newproperty(:ensure, :parent => Puppet::Property::Ensure) do
       newvalue(:present, :event => :user_created) do
@@ -83,14 +97,16 @@ module Puppet
     end
 
     newproperty(:uid) do
-      desc "The user ID.  Must be specified numerically.  For new users
-        being created, if no user ID is specified then one will be
-        chosen automatically, which will likely result in the same user
-        having different IDs on different systems, which is not
-        recommended.  This is especially noteworthy if you use Puppet
-        to manage the same user on both Darwin and other platforms,
-        since Puppet does the ID generation for you on Darwin, but the
-        tools do so on other platforms."
+      desc "The user ID; must be specified numerically. If no user ID is
+        specified when creating a new user, then one will be chosen
+        automatically. This will likely result in the same user having
+        different UIDs on different systems, which is not recommended. This is
+        especially noteworthy when managing the same user on both Darwin and
+        other platforms, since Puppet does UID generation on Darwin, but
+        the underlying tools do so on other platforms.
+
+        On Windows, this property is read-only and will return the user's
+        security identifier (SID)."
 
       munge do |value|
         case value
@@ -105,8 +121,10 @@ module Puppet
     end
 
     newproperty(:gid) do
-      desc "The user's primary group.  Can be specified numerically or
-        by name."
+      desc "The user's primary group.  Can be specified numerically or by name.
+
+        Note that users on Windows systems do not have a primary group; manage groups
+        with the `groups` attribute instead."
 
       munge do |value|
         if value.is_a?(String) and value =~ /^[-0-9]+$/
@@ -143,16 +161,33 @@ module Puppet
     end
 
     newproperty(:comment) do
-      desc "A description of the user.  Generally is a user's full name."
+      desc "A description of the user.  Generally the user's full name."
     end
 
     newproperty(:shell) do
       desc "The user's login shell.  The shell must exist and be
-        executable."
+        executable.
+
+        This attribute cannot be managed on Windows systems."
     end
 
     newproperty(:password, :required_features => :manages_passwords) do
-      desc "The user's password, in whatever encrypted format the local machine requires. Be sure to enclose any value that includes a dollar sign ($) in single quotes (\')."
+      desc %q{The user's password, in whatever encrypted format the local
+        system requires.
+
+        * Most modern Unix-like systems use salted SHA1 password hashes. You can use
+          Puppet's built-in `sha1` function to generate a hash from a password.
+        * Mac OS X 10.5 and 10.6 also use salted SHA1 hashes.
+        * Mac OS X 10.7 (Lion) uses salted SHA512 hashes. The Puppet Labs [stdlib][]
+          module contains a `str2saltedsha512` function which can generate password
+          hashes for Lion.
+        * Windows passwords can only be managed in cleartext, as there is no Windows API
+          for setting the password hash.
+
+        [stdlib]: https://github.com/puppetlabs/puppetlabs-stdlib/
+
+        Be sure to enclose any value that includes a dollar sign ($) in single
+        quotes (') to avoid accidental variable interpolation.}
 
       validate do |value|
         raise ArgumentError, "Passwords cannot include ':'" if value.is_a?(String) and value.include?(":")
@@ -165,10 +200,18 @@ module Puppet
           return "changed password"
         end
       end
+
+      def is_to_s( currentvalue )
+        return '[old password hash redacted]'
+      end
+      def should_to_s( newvalue )
+        return '[new password hash redacted]'
+      end
+
     end
 
     newproperty(:password_min_age, :required_features => :manages_password_age) do
-      desc "The minimum amount of time in days a password must be used before it may be changed"
+      desc "The minimum number of days a password must be used before it may be changed."
 
       munge do |value|
         case value
@@ -181,13 +224,13 @@ module Puppet
 
       validate do |value|
         if value.to_s !~ /^-?\d+$/
-          raise ArgumentError, "Password minimum age must be provided as a number"
+          raise ArgumentError, "Password minimum age must be provided as a number."
         end
       end
     end
 
     newproperty(:password_max_age, :required_features => :manages_password_age) do
-      desc "The maximum amount of time in days a password may be used before it must be changed"
+      desc "The maximum number of days a password may be used before it must be changed."
 
       munge do |value|
         case value
@@ -200,35 +243,40 @@ module Puppet
 
       validate do |value|
         if value.to_s !~ /^-?\d+$/
-          raise ArgumentError, "Password maximum age must be provided as a number"
+          raise ArgumentError, "Password maximum age must be provided as a number."
         end
       end
     end
 
     newproperty(:groups, :parent => Puppet::Property::List) do
-      desc "The groups of which the user is a member.  The primary
-        group should not be listed.  Multiple groups should be
-        specified as an array."
+      desc "The groups to which the user belongs.  The primary group should
+        not be listed, and groups should be identified by name rather than by
+        GID.  Multiple groups should be specified as an array."
 
       validate do |value|
         if value =~ /^\d+$/
-          raise ArgumentError, "Group names must be provided, not numbers"
+          raise ArgumentError, "Group names must be provided, not GID numbers."
         end
-        raise ArgumentError, "Group names must be provided as an array, not a comma-separated list" if value.include?(",")
+        raise ArgumentError, "Group names must be provided as an array, not a comma-separated list." if value.include?(",")
+        raise ArgumentError, "Group names must not be empty. If you want to specify \"no groups\" pass an empty array" if value.empty?
       end
     end
 
     newparam(:name) do
-      desc "User name.  While limitations are determined for
-        each operating system, it is generally a good idea to keep to
-        the degenerate 8 characters, beginning with a letter."
+      desc "The user name. While naming limitations vary by operating system,
+        it is advisable to restrict names to the lowest common denominator,
+        which is a maximum of 8 characters beginning with a letter.
+
+        Note that Puppet considers user names to be case-sensitive, regardless
+        of the platform's own rules; be sure to always use the same case when
+        referring to a given user."
       isnamevar
     end
 
     newparam(:membership) do
-      desc "Whether specified groups should be treated as the only groups
-        of which the user is a member or whether they should merely
-        be treated as the minimum membership list."
+      desc "Whether specified groups should be considered the **complete list**
+        (`inclusive`) or the **minimum list** (`minimum`) of groups to which
+        the user belongs. Defaults to `minimum`."
 
       newvalues(:inclusive, :minimum)
 
@@ -236,7 +284,9 @@ module Puppet
     end
 
     newparam(:system, :boolean => true) do
-      desc "Whether the user is a system user with lower UID."
+      desc "Whether the user is a system user, according to the OS's criteria;
+      on most platforms, a UID less than or equal to 500 indicates a system
+      user. Defaults to `false`."
 
       newvalues(:true, :false)
 
@@ -244,7 +294,7 @@ module Puppet
     end
 
     newparam(:allowdupe, :boolean => true) do
-      desc "Whether to allow duplicate UIDs."
+      desc "Whether to allow duplicate UIDs. Defaults to `false`."
 
       newvalues(:true, :false)
 
@@ -252,7 +302,11 @@ module Puppet
     end
 
     newparam(:managehome, :boolean => true) do
-      desc "Whether to manage the home directory when managing the user."
+      desc "Whether to manage the home directory when managing the user.
+        This will create the home directory when `ensure => present`,
+        delete the home directory when `ensure => absent`. Linux only:
+        this will update the user's home directory when the `home` property
+        changes. Defaults to `false`."
 
       newvalues(:true, :false)
 
@@ -260,18 +314,23 @@ module Puppet
 
       validate do |val|
         if val.to_s == "true"
-          raise ArgumentError, "User provider #{provider.class.name} can not manage home directories" unless provider.class.manages_homedir?
+          raise ArgumentError, "User provider #{provider.class.name} can not manage home directories" if provider and not provider.class.manages_homedir?
         end
       end
     end
 
     newproperty(:expiry, :required_features => :manages_expiry) do
       desc "The expiry date for this user. Must be provided in
-           a zero padded YYYY-MM-DD format - e.g 2010-02-19."
+           a zero-padded YYYY-MM-DD format --- e.g. 2010-02-19.
+           If you want to make sure the user account does never
+           expire, you can pass the special value `absent`."
+
+      newvalues :absent
+      newvalues /^\d{4}-\d{2}-\d{2}$/
 
       validate do |value|
-        if value !~ /^\d{4}-\d{2}-\d{2}$/
-          raise ArgumentError, "Expiry dates must be YYYY-MM-DD"
+        if value.intern != :absent and value !~ /^\d{4}-\d{2}-\d{2}$/
+          raise ArgumentError, "Expiry dates must be YYYY-MM-DD or the string \"absent\""
         end
       end
     end
@@ -307,7 +366,14 @@ module Puppet
       autos
     end
 
-    # Provide an external hook.  Yay breaking out of APIs.
+    # This method has been exposed for puppet to manage users and groups of
+    # files in its settings and should not be considered available outside of
+    # puppet.
+    #
+    # (see Puppet::Settings#service_user_available?)
+    #
+    # @returns [Boolean] if the user exists on the system
+    # @api private
     def exists?
       provider.exists?
     end
@@ -359,9 +425,9 @@ module Puppet
     end
 
     newparam(:role_membership) do
-      desc "Whether specified roles should be treated as the only roles
-        of which the user is a member or whether they should merely
-        be treated as the minimum membership list."
+      desc "Whether specified roles should be considered the **complete list**
+        (`inclusive`) or the **minimum list** (`minimum`) of roles the user
+        has. Defaults to `minimum`."
 
       newvalues(:inclusive, :minimum)
 
@@ -385,9 +451,9 @@ module Puppet
     end
 
     newparam(:auth_membership) do
-      desc "Whether specified auths should be treated as the only auths
-        of which the user is a member or whether they should merely
-        be treated as the minimum membership list."
+      desc "Whether specified auths should be considered the **complete list**
+        (`inclusive`) or the **minimum list** (`minimum`) of auths the user
+        has. Defaults to `minimum`."
 
       newvalues(:inclusive, :minimum)
 
@@ -411,9 +477,9 @@ module Puppet
     end
 
     newparam(:profile_membership) do
-      desc "Whether specified roles should be treated as the only roles
-        of which the user is a member or whether they should merely
-        be treated as the minimum membership list."
+      desc "Whether specified roles should be treated as the **complete list**
+        (`inclusive`) or the **minimum list** (`minimum`) of roles
+        of which the user is a member. Defaults to `minimum`."
 
       newvalues(:inclusive, :minimum)
 
@@ -421,21 +487,21 @@ module Puppet
     end
 
     newproperty(:keys, :parent => Puppet::Property::KeyValue, :required_features => :manages_solaris_rbac) do
-      desc "Specify user attributes in an array of keyvalue pairs"
+      desc "Specify user attributes in an array of key = value pairs."
 
       def membership
         :key_membership
       end
 
       validate do |value|
-        raise ArgumentError, "key value pairs must be seperated by an =" unless value.include?("=")
+        raise ArgumentError, "Key/value pairs must be separated by an =" unless value.include?("=")
       end
     end
 
     newparam(:key_membership) do
-      desc "Whether specified key value pairs should be treated as the only attributes
-        of the user or whether they should merely
-        be treated as the minimum list."
+      desc "Whether specified key/value pairs should be considered the
+        **complete list** (`inclusive`) or the **minimum list** (`minimum`) of
+        the user's attributes. Defaults to `minimum`."
 
       newvalues(:inclusive, :minimum)
 
@@ -443,7 +509,63 @@ module Puppet
     end
 
     newproperty(:project, :required_features => :manages_solaris_rbac) do
-      desc "The name of the project associated with a user"
+      desc "The name of the project associated with a user."
+    end
+
+    newparam(:ia_load_module, :required_features => :manages_aix_lam) do
+      desc "The name of the I&A module to use to manage this user."
+    end
+
+    newproperty(:attributes, :parent => Puppet::Property::KeyValue, :required_features => :manages_aix_lam) do
+      desc "Specify AIX attributes for the user in an array of attribute = value pairs."
+
+      def membership
+        :attribute_membership
+      end
+
+      def delimiter
+        " "
+      end
+
+      validate do |value|
+        raise ArgumentError, "Attributes value pairs must be separated by an =" unless value.include?("=")
+      end
+    end
+
+    newparam(:attribute_membership) do
+      desc "Whether specified attribute value pairs should be treated as the
+        **complete list** (`inclusive`) or the **minimum list** (`minimum`) of
+        attribute/value pairs for the user. Defaults to `minimum`."
+
+      newvalues(:inclusive, :minimum)
+
+      defaultto :minimum
+    end
+
+    newproperty(:salt, :required_features => :manages_password_salt) do
+      desc "This is the 32 byte salt used to generate the PBKDF2 password used in
+            OS X"
+    end
+
+    newproperty(:iterations, :required_features => :manages_password_salt) do
+      desc "This is the number of iterations of a chained computation of the
+            password hash (http://en.wikipedia.org/wiki/PBKDF2).  This parameter
+            is used in OS X"
+
+      munge do |value|
+        if value.is_a?(String) and value =~/^[-0-9]+$/
+          Integer(value)
+        else
+          value
+        end
+      end
+    end
+
+    newparam(:forcelocal, :boolean => true, :required_features => :libuser ) do
+      desc "Forces the mangement of local accounts when accounts are also
+            being managed by some other NSS"
+      newvalues(:true, :false)
+      defaultto false
     end
   end
 end

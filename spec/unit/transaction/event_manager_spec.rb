@@ -1,10 +1,11 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/transaction/event_manager'
 
 describe Puppet::Transaction::EventManager do
+  include PuppetSpec::Files
+
   describe "at initialization" do
     it "should require a transaction" do
       Puppet::Transaction::EventManager.new("trans").transaction.should == "trans"
@@ -24,7 +25,7 @@ describe Puppet::Transaction::EventManager do
     before do
       @manager = Puppet::Transaction::EventManager.new(@transaction)
 
-      @resource = Puppet::Type.type(:file).new :path => "/my/file"
+      @resource = Puppet::Type.type(:file).new :path => make_absolute("/my/file")
 
       @graph = stub 'graph', :matching_edges => [], :resource => @resource
       @manager.stubs(:relationship_graph).returns @graph
@@ -101,6 +102,16 @@ describe Puppet::Transaction::EventManager do
 
       @manager.queue_events(@resource, [@event])
     end
+
+    it "should dequeue events for the changed resource if an event with invalidate_refreshes is processed" do
+      @event2 = Puppet::Transaction::Event.new(:name => :foo, :resource => @resource, :invalidate_refreshes => true)
+
+      @graph.stubs(:matching_edges).returns []
+
+      @manager.expects(:dequeue_events_for_resource).with(@resource, :refresh)
+
+      @manager.queue_events(@resource, [@event, @event2])
+    end
   end
 
   describe "when queueing events for a resource" do
@@ -140,7 +151,7 @@ describe Puppet::Transaction::EventManager do
       @manager = Puppet::Transaction::EventManager.new(@transaction)
       @manager.stubs(:queue_events)
 
-      @resource = Puppet::Type.type(:file).new :path => "/my/file"
+      @resource = Puppet::Type.type(:file).new :path => make_absolute("/my/file")
       @event = Puppet::Transaction::Event.new(:name => :event, :resource => @resource)
     end
 
@@ -254,6 +265,38 @@ describe Puppet::Transaction::EventManager do
       it "should set the 'restarted' state on the resource status" do
         @manager.process_events(@resource)
         @transaction.resource_status(@resource).should_not be_restarted
+      end
+    end
+  end
+
+  describe "when queueing then processing events for a given resource" do
+    before do
+      @transaction = Puppet::Transaction.new(Puppet::Resource::Catalog.new)
+      @manager = Puppet::Transaction::EventManager.new(@transaction)
+
+      @graph = stub 'graph', :matching_edges => [], :resource => @resource
+      @graph.stubs(:matching_edges).returns []
+      @manager.stubs(:relationship_graph).returns @graph
+
+      @resource = Puppet::Type.type(:file).new :path => make_absolute("/my/file")
+      @resource.expects(:self_refresh?).returns true
+      @resource.expects(:deleting?).returns false
+      @resource.expects(:info).with { |msg| msg.include?("Scheduling refresh") }
+      @event = Puppet::Transaction::Event.new(:name => :foo, :resource => @resource)
+    end
+
+    describe "and the events were dequeued/invalidated" do
+      before do
+        @event2 = Puppet::Transaction::Event.new(:name => :foo, :resource => @resource, :invalidate_refreshes => true)
+        @resource.expects(:info).with { |msg| msg.include?("Unscheduling") }
+      end
+
+      it "should not run an event or log" do
+        @resource.expects(:notice).with { |msg| msg.include?("Would have triggered 'refresh'") }.never
+        @resource.expects(:refresh).never
+
+        @manager.queue_events(@resource, [@event, @event2])
+        @manager.process_events(@resource)
       end
     end
   end

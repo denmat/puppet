@@ -1,19 +1,13 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe Puppet::Type.type(:group) do
   before do
-    ENV["PATH"] += File::PATH_SEPARATOR + "/usr/sbin" unless ENV["PATH"].split(File::PATH_SEPARATOR).include?("/usr/sbin")
     @class = Puppet::Type.type(:group)
   end
 
-  it "should have a default provider" do
-    @class.defaultprovider.should_not be_nil
-  end
-
-  it "should have a default provider inheriting from Puppet::Provider" do
-    @class.defaultprovider.ancestors.should be_include(Puppet::Provider)
+  it "should have a system_groups feature" do
+    @class.provider_feature(:system_groups).should_not be_nil
   end
 
   describe "when validating attributes" do
@@ -38,9 +32,12 @@ describe Puppet::Type.type(:group) do
     end
   end
 
-  # #1407 - we need to declare the allowdupe param as boolean.
   it "should have a boolean method for determining if duplicates are allowed" do
-    @class.new(:name => "foo").methods.should be_include("allowdupe?")
+    @class.new(:name => "foo").must respond_to "allowdupe?"
+  end
+
+  it "should have a boolean method for determining if system groups are allowed" do
+    @class.new(:name => "foo").must respond_to "system?"
   end
 
   it "should call 'create' to create the group" do
@@ -53,5 +50,15 @@ describe Puppet::Type.type(:group) do
     group = @class.new(:name => "foo", :ensure => :absent)
     group.provider.expects(:delete)
     group.parameter(:ensure).sync
+  end
+
+  it "delegates the existance check to its provider" do
+    provider = @class.provide(:testing) {}
+    provider_instance = provider.new
+    provider_instance.expects(:exists?).returns true
+
+    type = @class.new(:name => "group", :provider => provider_instance)
+
+    type.exists?.should == true
   end
 end

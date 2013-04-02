@@ -1,30 +1,16 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2007-9-23.
-#  Copyright (c) 2007. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/node'
 
 describe Puppet::Node do
   describe "when delegating indirection calls" do
     before do
+      Puppet::Node.indirection.reset_terminus_class
+      Puppet::Node.indirection.cache_class = nil
+
       @name = "me"
       @node = Puppet::Node.new(@name)
-    end
-
-    it "should be able to use the exec terminus" do
-      Puppet::Node.indirection.stubs(:terminus_class).returns :exec
-
-      # Load now so we can stub
-      terminus = Puppet::Node.indirection.terminus(:exec)
-
-      terminus.expects(:query).with(@name).returns "myresults"
-      terminus.expects(:translate).with(@name, "myresults").returns "translated_results"
-      terminus.expects(:create_node).with(@name, "translated_results").returns @node
-
-      Puppet::Node.indirection.find(@name).should equal(@node)
     end
 
     it "should be able to use the yaml terminus" do
@@ -57,10 +43,13 @@ describe Puppet::Node do
     describe "and using the memory terminus" do
       before do
         @name = "me"
-        @old_terminus = Puppet::Node.indirection.terminus_class
         @terminus = Puppet::Node.indirection.terminus(:memory)
         Puppet::Node.indirection.stubs(:terminus).returns @terminus
         @node = Puppet::Node.new(@name)
+      end
+
+      after do
+        @terminus.instance_variable_set(:@instances, {})
       end
 
       it "should find no nodes by default" do

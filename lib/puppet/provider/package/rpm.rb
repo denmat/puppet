@@ -1,4 +1,5 @@
 require 'puppet/provider/package'
+
 # RPM packaging.  Should work anywhere that has rpm installed.
 Puppet::Type.type(:package).provide :rpm, :source => :rpm, :parent => Puppet::Provider::Package do
   desc "RPM packaging support; should work anywhere with a working `rpm`
@@ -36,7 +37,7 @@ Puppet::Type.type(:package).provide :rpm, :source => :rpm, :parent => Puppet::Pr
     begin
       execpipe("#{command(:rpm)} -qa #{sig} --nodigest --qf '#{NEVRAFORMAT}\n'") { |process|
         # now turn each returned line into a package object
-        process.each { |line|
+        process.each_line { |line|
           hash = nevra_to_hash(line)
           packages << new(hash)
         }
@@ -129,4 +130,3 @@ Puppet::Type.type(:package).provide :rpm, :source => :rpm, :parent => Puppet::Pr
     hash
   end
 end
-

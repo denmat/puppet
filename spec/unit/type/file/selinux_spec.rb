@@ -1,13 +1,14 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
-
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 [:seluser, :selrole, :seltype, :selrange].each do |param|
   property = Puppet::Type.type(:file).attrclass(param)
   describe property do
+    include PuppetSpec::Files
+
     before do
-      @resource = Puppet::Type.type(:file).new :path => "/my/file"
+      @path = make_absolute("/my/file")
+      @resource = Puppet::Type.type(:file).new :path => @path
       @sel = property.new :resource => @resource
     end
 
@@ -19,14 +20,14 @@ require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
     it "should retrieve nil for #{param} if there is no SELinux support" do
       stat = stub 'stat', :ftype => "foo"
       @resource.expects(:stat).returns stat
-      @sel.expects(:get_selinux_current_context).with("/my/file").returns nil
+      @sel.expects(:get_selinux_current_context).with(@path).returns nil
       @sel.retrieve.should be_nil
     end
 
     it "should retrieve #{param} if a SELinux context is found with a range" do
       stat = stub 'stat', :ftype => "foo"
       @resource.expects(:stat).returns stat
-      @sel.expects(:get_selinux_current_context).with("/my/file").returns "user_u:role_r:type_t:s0"
+      @sel.expects(:get_selinux_current_context).with(@path).returns "user_u:role_r:type_t:s0"
       expectedresult = case param
         when :seluser; "user_u"
         when :selrole; "role_r"
@@ -39,7 +40,7 @@ require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
     it "should retrieve #{param} if a SELinux context is found without a range" do
       stat = stub 'stat', :ftype => "foo"
       @resource.expects(:stat).returns stat
-      @sel.expects(:get_selinux_current_context).with("/my/file").returns "user_u:role_r:type_t"
+      @sel.expects(:get_selinux_current_context).with(@path).returns "user_u:role_r:type_t"
       expectedresult = case param
         when :seluser; "user_u"
         when :selrole; "role_r"
@@ -50,13 +51,13 @@ require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
     end
 
     it "should handle no default gracefully" do
-      @sel.expects(:get_selinux_default_context).with("/my/file").returns nil
+      @sel.expects(:get_selinux_default_context).with(@path).returns nil
       @sel.default.must be_nil
     end
 
     it "should be able to detect matchpathcon defaults" do
       @sel.stubs(:debug)
-      @sel.expects(:get_selinux_default_context).with("/my/file").returns "user_u:role_r:type_t:s0"
+      @sel.expects(:get_selinux_default_context).with(@path).returns "user_u:role_r:type_t:s0"
       expectedresult = case param
         when :seluser; "user_u"
         when :selrole; "role_r"
@@ -74,7 +75,7 @@ require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
     it "should be able to set a new context" do
       stat = stub 'stat', :ftype => "foo"
       @sel.should = %w{newone}
-      @sel.expects(:set_selinux_context).with("/my/file", ["newone"], param)
+      @sel.expects(:set_selinux_context).with(@path, ["newone"], param)
       @sel.sync
     end
 

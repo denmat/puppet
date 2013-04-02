@@ -1,12 +1,14 @@
 # Manage debian services.  Start/stop is the same as InitSvc, but enable/disable
 # is special.
 Puppet::Type.type(:service).provide :debian, :parent => :init do
-  desc "Debian's form of `init`-style management.
+  desc <<-EOT
+    Debian's form of `init`-style management.
 
-  The only difference is that this supports service enabling and disabling
-  via `update-rc.d` and determines enabled status via `invoke-rc.d`.
+    The only differences from `init` are support for enabling and disabling
+    services via `update-rc.d` and the ability to determine enabled status via
+    `invoke-rc.d`.
 
-  "
+  EOT
 
   commands :update_rc => "/usr/sbin/update-rc.d"
   # note this isn't being used as a command until
@@ -16,18 +18,18 @@ Puppet::Type.type(:service).provide :debian, :parent => :init do
 
   defaultfor :operatingsystem => [:debian, :ubuntu]
 
-  def self.defpath
-    superclass.defpath
-  end
-
   # Remove the symlinks
   def disable
-    update_rc "-f", @resource[:name], "remove"
-    update_rc @resource[:name], "stop", "00", "1", "2", "3", "4", "5", "6", "."
+    if `dpkg --compare-versions $(dpkg-query -W --showformat '${Version}' sysv-rc) ge 2.88 ; echo $?`.to_i == 0
+      update_rc @resource[:name], "disable"
+    else
+      update_rc "-f", @resource[:name], "remove"
+      update_rc @resource[:name], "stop", "00", "1", "2", "3", "4", "5", "6", "."
+    end
   end
 
   def enabled?
-    # TODO: Replace system call when Puppet::Util.execute gives us a way
+    # TODO: Replace system call when Puppet::Util::Execution.execute gives us a way
     # to determine exit status.  http://projects.reductivelabs.com/issues/2538
     system("/usr/sbin/invoke-rc.d", "--quiet", "--query", @resource[:name], "start")
 
@@ -36,9 +38,23 @@ Puppet::Type.type(:service).provide :debian, :parent => :init do
     # See x-man-page://invoke-rc.d
     if [104, 106].include?($CHILD_STATUS.exitstatus)
       return :true
+    elsif [105].include?($CHILD_STATUS.exitstatus)
+      # 105 is unknown, which generally means the the iniscript does not support query
+      # The debian policy states that the initscript should support methods of query
+      # For those that do not, peform the checks manually
+      # http://www.debian.org/doc/debian-policy/ch-opersys.html
+      if get_start_link_count >= 4
+        return :true
+      else
+        return :false
+      end
     else
       return :false
     end
+  end
+
+  def get_start_link_count
+    Dir.glob("/etc/rc*.d/S*#{@resource[:name]}").length
   end
 
   def enable

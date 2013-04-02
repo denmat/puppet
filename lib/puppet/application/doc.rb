@@ -1,7 +1,6 @@
 require 'puppet/application'
 
 class Puppet::Application::Doc < Puppet::Application
-  should_not_parse_config
   run_mode :master
 
   attr_accessor :unknown_args, :manifest
@@ -50,7 +49,7 @@ class Puppet::Application::Doc < Puppet::Application
   end
 
   def help
-    <<-HELP
+    <<-'HELP'
 
 puppet-doc(8) -- Generate Puppet documentation and references
 ========
@@ -59,6 +58,8 @@ SYNOPSIS
 --------
 Generates a reference for all Puppet types. Largely meant for internal
 Puppet Labs use.
+
+WARNING: RDoc support is only available under Ruby 1.8.7 and earlier.
 
 
 USAGE
@@ -83,33 +84,49 @@ can be changed with the 'outputdir' option.
 If the command is run with the name of a manifest file as an argument,
 puppet doc will output a single manifest's documentation on stdout.
 
+WARNING: RDoc support is only available under Ruby 1.8.7 and earlier.
+The internal API used to support manifest documentation has changed
+radically in newer versions, and support is not yet available for
+using those versions of RDoc.
+
 
 OPTIONS
 -------
 * --all:
-  Output the docs for all of the reference types. In 'rdoc'
-  modes, this also outputs documentation for all resources
+  Output the docs for all of the reference types. In 'rdoc' mode, this also
+  outputs documentation for all resources.
 
 * --help:
   Print this help message
 
 * --outputdir:
-  Specifies the directory where to output the rdoc
-  documentation in 'rdoc' mode.
+  Used only in 'rdoc' mode. The directory to which the rdoc output should
+  be written.
 
 * --mode:
-  Determine the output mode. Valid modes are 'text', 'pdf' and
-  'rdoc'. The 'pdf' mode creates PDF formatted files in the
-  /tmp directory. The default mode is 'text'. In 'rdoc' mode
-  you must provide 'manifests-path'
+  Determine the output mode. Valid modes are 'text', 'pdf' and 'rdoc'. The 'pdf'
+  mode creates PDF formatted files in the /tmp directory. The default mode is
+  'text'.
 
 * --reference:
-  Build a particular reference. Get a list of references by
-  running 'puppet doc --list'.
+  Build a particular reference. Get a list of references by running
+  'puppet doc --list'.
 
 * --charset:
-  Used only in 'rdoc' mode. It sets the charset used in the
-  html files produced.
+  Used only in 'rdoc' mode. It sets the charset used in the html files produced.
+
+* --manifestdir:
+  Used only in 'rdoc' mode. The directory to scan for stand-alone manifests.
+  If not supplied, puppet doc will use the manifestdir from puppet.conf.
+
+* --modulepath:
+  Used only in 'rdoc' mode. The directory or directories to scan for modules.
+  If not supplied, puppet doc will use the modulepath from puppet.conf.
+
+* --environment:
+  Used only in 'rdoc' mode. The configuration environment from which
+  to read the modulepath and manifestdir settings, when reading said settings
+  from puppet.conf.
 
 
 EXAMPLE
@@ -136,8 +153,7 @@ Luke Kanies
 
 COPYRIGHT
 ---------
-Copyright (c) 2005-2007 Puppet Labs, LLC Licensed under the GNU Public
-License
+Copyright (c) 2011 Puppet Labs, LLC Licensed under the Apache 2.0 License
 
 HELP
   end
@@ -157,7 +173,7 @@ HELP
     unless @manifest
       env = Puppet::Node::Environment.new
       files += env.modulepath
-      files << File.dirname(env[:manifest])
+      files << ::File.dirname(env[:manifest])
     end
     files += command_line.args
     Puppet.info "scanning: #{files.inspect}"
@@ -172,8 +188,7 @@ HELP
         Puppet::Util::RDoc.rdoc(options[:outputdir], files, options[:charset])
       end
     rescue => detail
-      puts detail.backtrace if Puppet[:trace]
-      $stderr.puts "Could not generate documentation: #{detail}"
+      Puppet.log_exception(detail, "Could not generate documentation: #{detail}")
       exit_code = 1
     end
     exit exit_code
@@ -191,8 +206,7 @@ HELP
         # Add the per-section text, but with no ToC
         text += section.send(options[:format], with_contents)
       rescue => detail
-        puts detail.backtrace
-        $stderr.puts "Could not generate reference #{name}: #{detail}"
+        Puppet.log_exception(detail, "Could not generate reference #{name}: #{detail}")
         exit_code = 1
         next
       end
@@ -242,14 +256,11 @@ HELP
       @unknown_args.each do |option|
         # force absolute path for modulepath when passed on commandline
         if option[:opt]=="--modulepath" or option[:opt] == "--manifestdir"
-          option[:arg] = option[:arg].split(':').collect { |p| File.expand_path(p) }.join(':')
+          option[:arg] = option[:arg].split(::File::PATH_SEPARATOR).collect { |p| ::File.expand_path(p) }.join(::File::PATH_SEPARATOR)
         end
         Puppet.settings.handlearg(option[:opt], option[:arg])
       end
     end
-
-    # Now parse the config
-    Puppet.parse_config
 
     # Handle the logging settings.
     if options[:debug] or options[:verbose]

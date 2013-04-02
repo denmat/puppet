@@ -1,7 +1,7 @@
 module Puppet
   newtype(:sshkey) do
     @doc = "Installs and manages ssh host keys.  At this point, this type
-      only knows how to install keys into `/etc/ssh/ssh_known_hosts`.  See 
+      only knows how to install keys into `/etc/ssh/ssh_known_hosts`.  See
       the `ssh_authorized_key` type to manage authorized keys."
 
     ensurable
@@ -9,10 +9,10 @@ module Puppet
     newproperty(:type) do
       desc "The encryption type used.  Probably ssh-dss or ssh-rsa."
 
-      newvalue("ssh-dss")
-      newvalue("ssh-rsa")
-      aliasvalue(:dsa, "ssh-dss")
-      aliasvalue(:rsa, "ssh-rsa")
+      newvalues :'ssh-dss', :'ssh-rsa', :'ecdsa-sha2-nistp256', :'ecdsa-sha2-nistp384', :'ecdsa-sha2-nistp521'
+
+      aliasvalue(:dsa, :'ssh-dss')
+      aliasvalue(:rsa, :'ssh-rsa')
     end
 
     newproperty(:key) do

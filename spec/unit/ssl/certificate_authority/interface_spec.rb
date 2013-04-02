@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/ssl/certificate_authority'
 
@@ -32,45 +31,44 @@ describe Puppet::SSL::CertificateAuthority::Interface do
   end
   describe "when initializing" do
     it "should set its method using its settor" do
-      @class.any_instance.expects(:method=).with(:generate)
-      @class.new(:generate, :to => :all)
+      instance = @class.new(:generate, :to => :all)
+      instance.method.should == :generate
     end
 
     it "should set its subjects using the settor" do
-      @class.any_instance.expects(:subjects=).with(:all)
-      @class.new(:generate, :to => :all)
+      instance = @class.new(:generate, :to => :all)
+      instance.subjects.should == :all
     end
 
     it "should set the digest if given" do
       interface = @class.new(:generate, :to => :all, :digest => :digest)
       interface.digest.should == :digest
     end
-
-    it "should set the digest to md5 if none given" do
-      interface = @class.new(:generate, :to => :all)
-      interface.digest.should == :MD5
-    end
   end
 
   describe "when setting the method" do
     it "should set the method" do
-      @class.new(:generate, :to => :all).method.should == :generate
+      instance = @class.new(:generate, :to => :all)
+      instance.method = :list
+
+      instance.method.should == :list
     end
 
     it "should fail if the method isn't a member of the INTERFACE_METHODS array" do
-      Puppet::SSL::CertificateAuthority::Interface::INTERFACE_METHODS.expects(:include?).with(:thing).returns false
-
-      lambda { @class.new(:thing, :to => :all) }.should raise_error(ArgumentError)
+      lambda { @class.new(:thing, :to => :all) }.should raise_error(ArgumentError, /Invalid method thing to apply/)
     end
   end
 
   describe "when setting the subjects" do
     it "should set the subjects" do
-      @class.new(:generate, :to => :all).subjects.should == :all
+      instance = @class.new(:generate, :to => :all)
+      instance.subjects = :signed
+
+      instance.subjects.should == :signed
     end
 
     it "should fail if the subjects setting isn't :all or an array" do
-      lambda { @class.new(:generate, "other") }.should raise_error(ArgumentError)
+      lambda { @class.new(:generate, :to => "other") }.should raise_error(ArgumentError, /Subjects must be an array or :all; not other/)
     end
   end
 
@@ -82,24 +80,6 @@ describe Puppet::SSL::CertificateAuthority::Interface do
     before do
       # We use a real object here, because :verify can't be stubbed, apparently.
       @ca = Object.new
-    end
-
-    it "should raise InterfaceErrors" do
-      @applier = @class.new(:revoke, :to => :all)
-
-      @ca.expects(:list).raises Puppet::SSL::CertificateAuthority::Interface::InterfaceError
-
-      lambda { @applier.apply(@ca) }.should raise_error(Puppet::SSL::CertificateAuthority::Interface::InterfaceError)
-    end
-
-    it "should log non-Interface failures rather than failing" do
-      @applier = @class.new(:revoke, :to => :all)
-
-      @ca.expects(:list).raises ArgumentError
-
-      Puppet.expects(:err)
-
-      lambda { @applier.apply(@ca) }.should_not raise_error
     end
 
     describe "with an empty array specified and the method is not list" do
@@ -118,8 +98,8 @@ describe Puppet::SSL::CertificateAuthority::Interface do
       it "should call :generate on the CA for each host specified" do
         @applier = @class.new(:generate, :to => %w{host1 host2})
 
-        @ca.expects(:generate).with("host1")
-        @ca.expects(:generate).with("host2")
+        @ca.expects(:generate).with("host1", {})
+        @ca.expects(:generate).with("host2", {})
 
         @applier.apply(@ca)
       end
@@ -150,15 +130,24 @@ describe Puppet::SSL::CertificateAuthority::Interface do
 
     describe ":sign" do
       describe "and an array of names was provided" do
-        before do
-          @applier = @class.new(:sign, :to => %w{host1 host2})
-        end
+        let(:applier) { @class.new(:sign, @options.merge(:to => %w{host1 host2})) }
 
         it "should sign the specified waiting certificate requests" do
-          @ca.expects(:sign).with("host1")
-          @ca.expects(:sign).with("host2")
+          @options = {:allow_dns_alt_names => false}
 
-          @applier.apply(@ca)
+          @ca.expects(:sign).with("host1", false)
+          @ca.expects(:sign).with("host2", false)
+
+          applier.apply(@ca)
+        end
+
+        it "should sign the certificate requests with alt names if specified" do
+          @options = {:allow_dns_alt_names => true}
+
+          @ca.expects(:sign).with("host1", true)
+          @ca.expects(:sign).with("host2", true)
+
+          applier.apply(@ca)
         end
       end
 
@@ -166,8 +155,8 @@ describe Puppet::SSL::CertificateAuthority::Interface do
         it "should sign all waiting certificate requests" do
           @ca.stubs(:waiting?).returns(%w{cert1 cert2})
 
-          @ca.expects(:sign).with("cert1")
-          @ca.expects(:sign).with("cert2")
+          @ca.expects(:sign).with("cert1", nil)
+          @ca.expects(:sign).with("cert2", nil)
 
           @applier = @class.new(:sign, :to => :all)
           @applier.apply(@ca)
@@ -183,63 +172,96 @@ describe Puppet::SSL::CertificateAuthority::Interface do
     end
 
     describe ":list" do
+      before :each do
+        @cert = Puppet::SSL::Certificate.new 'foo'
+        @csr = Puppet::SSL::CertificateRequest.new 'bar'
+
+        @cert.stubs(:subject_alt_names).returns []
+        @csr.stubs(:subject_alt_names).returns []
+
+        Puppet::SSL::Certificate.indirection.stubs(:find).returns @cert
+        Puppet::SSL::CertificateRequest.indirection.stubs(:find).returns @csr
+
+        @digest = mock("digest")
+        @digest.stubs(:to_s).returns("(fingerprint)")
+        @ca.expects(:waiting?).returns %w{host1 host2 host3}
+        @ca.expects(:list).returns %w{host4 host5 host6}
+        @csr.stubs(:digest).returns @digest
+        @cert.stubs(:digest).returns @digest
+        @ca.stubs(:verify)
+      end
+
       describe "and an empty array was provided" do
-        it "should print a string containing all certificate requests" do
-          @ca.expects(:waiting?).returns %w{host1 host2}
-          @ca.stubs(:verify)
+        it "should print all certificate requests" do
+          applier = @class.new(:list, :to => [])
 
-          @applier = @class.new(:list, :to => [])
+          applier.expects(:puts).with(<<-OUTPUT.chomp)
+  "host1" (fingerprint)
+  "host2" (fingerprint)
+  "host3" (fingerprint)
+          OUTPUT
 
-          @applier.expects(:puts).with "host1\nhost2"
-
-          @applier.apply(@ca)
+          applier.apply(@ca)
         end
       end
 
       describe "and :all was provided" do
         it "should print a string containing all certificate requests and certificates" do
-          @ca.expects(:waiting?).returns %w{host1 host2}
-          @ca.expects(:list).returns %w{host3 host4}
-          @ca.stubs(:verify)
-          @ca.stubs(:fingerprint).returns "fingerprint"
-          @ca.expects(:verify).with("host3").raises(Puppet::SSL::CertificateAuthority::CertificateVerificationError.new(23), "certificate revoked")
+          @ca.stubs(:verify).with("host4").raises(Puppet::SSL::CertificateAuthority::CertificateVerificationError.new(23), "certificate revoked")
 
-          @applier = @class.new(:list, :to => :all)
+          applier = @class.new(:list, :to => :all)
 
-          @applier.expects(:puts).with "host1 (fingerprint)"
-          @applier.expects(:puts).with "host2 (fingerprint)"
-          @applier.expects(:puts).with "- host3 (fingerprint) (certificate revoked)"
-          @applier.expects(:puts).with "+ host4 (fingerprint)"
+          applier.expects(:puts).with(<<-OUTPUT.chomp)
+  "host1" (fingerprint)
+  "host2" (fingerprint)
+  "host3" (fingerprint)
++ "host5" (fingerprint)
++ "host6" (fingerprint)
+- "host4" (fingerprint) (certificate revoked)
+          OUTPUT
 
-          @applier.apply(@ca)
+          applier.apply(@ca)
         end
       end
 
       describe "and :signed was provided" do
         it "should print a string containing all signed certificate requests and certificates" do
-          @ca.expects(:list).returns %w{host1 host2}
+          applier = @class.new(:list, :to => :signed)
 
-          @applier = @class.new(:list, :to => :signed)
+          applier.expects(:puts).with(<<-OUTPUT.chomp)
++ "host4" (fingerprint)
++ "host5" (fingerprint)
++ "host6" (fingerprint)
+          OUTPUT
 
-          @applier.apply(@ca)
+          applier.apply(@ca)
+        end
+
+        it "should include subject alt names if they are on the certificate request" do
+          @csr.stubs(:subject_alt_names).returns ["DNS:foo", "DNS:bar"]
+
+          applier = @class.new(:list, :to => ['host1'])
+
+          applier.expects(:puts).with(<<-OUTPUT.chomp)
+  "host1" (fingerprint) (alt names: "DNS:foo", "DNS:bar")
+          OUTPUT
+
+          applier.apply(@ca)
         end
       end
 
       describe "and an array of names was provided" do
-        it "should print a string of all named hosts that have a waiting request" do
-          @ca.expects(:waiting?).returns %w{host1 host2}
-          @ca.expects(:list).returns %w{host3 host4}
-          @ca.stubs(:fingerprint).returns "fingerprint"
-          @ca.stubs(:verify)
+        it "should print all named hosts" do
+          applier = @class.new(:list, :to => %w{host1 host2 host4 host5})
 
-          @applier = @class.new(:list, :to => %w{host1 host2 host3 host4})
+          applier.expects(:puts).with(<<-OUTPUT.chomp)
+  "host1" (fingerprint)
+  "host2" (fingerprint)
++ "host4" (fingerprint)
++ "host5" (fingerprint)
+            OUTPUT
 
-          @applier.expects(:puts).with "host1 (fingerprint)"
-          @applier.expects(:puts).with "host2 (fingerprint)"
-          @applier.expects(:puts).with "+ host3 (fingerprint)"
-          @applier.expects(:puts).with "+ host4 (fingerprint)"
-
-          @applier.apply(@ca)
+          applier.apply(@ca)
         end
       end
     end
@@ -289,10 +311,19 @@ describe Puppet::SSL::CertificateAuthority::Interface do
     end
 
     describe ":fingerprint" do
-      it "should fingerprint with the set digest algorithm" do
-        @applier = @class.new(:fingerprint, :to => %w{host1}, :digest => :digest)
+      before(:each) do
+        @cert = Puppet::SSL::Certificate.new 'foo'
+        @csr = Puppet::SSL::CertificateRequest.new 'bar'
+        Puppet::SSL::Certificate.indirection.stubs(:find)
+        Puppet::SSL::CertificateRequest.indirection.stubs(:find)
+        Puppet::SSL::Certificate.indirection.stubs(:find).with('host1').returns(@cert)
+        Puppet::SSL::CertificateRequest.indirection.stubs(:find).with('host2').returns(@csr)
+      end
 
-        @ca.expects(:fingerprint).with("host1", :digest).returns "fingerprint1"
+      it "should fingerprint with the set digest algorithm" do
+        @applier = @class.new(:fingerprint, :to => %w{host1}, :digest => :shaonemillion)
+        @cert.expects(:digest).with(:shaonemillion).returns("fingerprint1")
+
         @applier.expects(:puts).with "host1 fingerprint1"
 
         @applier.apply(@ca)
@@ -305,10 +336,10 @@ describe Puppet::SSL::CertificateAuthority::Interface do
 
           @applier = @class.new(:fingerprint, :to => :all)
 
-          @ca.expects(:fingerprint).with("host1", :MD5).returns "fingerprint1"
+          @cert.expects(:digest).returns("fingerprint1")
           @applier.expects(:puts).with "host1 fingerprint1"
 
-          @ca.expects(:fingerprint).with("host2", :MD5).returns "fingerprint2"
+          @csr.expects(:digest).returns("fingerprint2")
           @applier.expects(:puts).with "host2 fingerprint2"
 
           @applier.apply(@ca)
@@ -319,10 +350,10 @@ describe Puppet::SSL::CertificateAuthority::Interface do
         it "should print each named certificate if found" do
           @applier = @class.new(:fingerprint, :to => %w{host1 host2})
 
-          @ca.expects(:fingerprint).with("host1", :MD5).returns "fingerprint1"
+          @cert.expects(:digest).returns("fingerprint1")
           @applier.expects(:puts).with "host1 fingerprint1"
 
-          @ca.expects(:fingerprint).with("host2", :MD5).returns "fingerprint2"
+          @csr.expects(:digest).returns("fingerprint2")
           @applier.expects(:puts).with "host2 fingerprint2"
 
           @applier.apply(@ca)

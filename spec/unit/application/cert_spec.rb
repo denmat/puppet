@@ -1,22 +1,15 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
-
+#! /usr/bin/env ruby
+require 'spec_helper'
 require 'puppet/application/cert'
 
-describe Puppet::Application::Cert do
+describe Puppet::Application::Cert => true do
   before :each do
     @cert_app = Puppet::Application[:cert]
     Puppet::Util::Log.stubs(:newdestination)
-    Puppet::Util::Log.stubs(:level=)
   end
 
   it "should operate in master run_mode" do
     @cert_app.class.run_mode.name.should equal(:master)
-  end
-
-  it "should ask Puppet::Application to parse Puppet configuration file" do
-    @cert_app.should_parse_config?.should be_true
   end
 
   it "should declare a main command" do
@@ -30,22 +23,17 @@ describe Puppet::Application::Cert do
   end
 
   it "should set log level to info with the --verbose option" do
-
-    Puppet::Log.expects(:level=).with(:info)
-
     @cert_app.handle_verbose(0)
+    Puppet::Log.level.should == :info
   end
 
   it "should set log level to debug with the --debug option" do
-
-    Puppet::Log.expects(:level=).with(:debug)
-
     @cert_app.handle_debug(0)
+    Puppet::Log.level.should == :debug
   end
 
   it "should set the fingerprint digest with the --digest option" do
     @cert_app.handle_digest(:digest)
-
     @cert_app.digest.should == :digest
   end
 
@@ -87,18 +75,14 @@ describe Puppet::Application::Cert do
     end
 
     it "should print puppet config if asked to in Puppet config" do
-      @cert_app.stubs(:exit)
       Puppet.settings.stubs(:print_configs?).returns(true)
-
-      Puppet.settings.expects(:print_configs)
-
-      @cert_app.setup
+      Puppet.settings.expects(:print_configs).returns true
+      expect { @cert_app.setup }.to exit_with 0
     end
 
     it "should exit after printing puppet config if asked to in Puppet config" do
       Puppet.settings.stubs(:print_configs?).returns(true)
-
-      lambda { @cert_app.setup }.should raise_error(SystemExit)
+      expect { @cert_app.setup }.to exit_with 1
     end
 
     it "should set the CA location to 'only'" do
@@ -189,16 +173,6 @@ describe Puppet::Application::Cert do
       @cert_app.ca = @ca
     end
 
-    it "should SystemExit after printing help message" do
-      # Make the help method silent for testing; this is a bit nasty, but we
-      # can't identify a cleaner method.  Help welcome. --daniel 2011-02-22
-      Puppet.features.stubs(:usage?).returns(false)
-      @cert_app.stubs(:puts)
-
-      @cert_app.command_line.stubs(:args).returns([])
-      expect { @cert_app.parse_options }.should raise_error SystemExit
-    end
-
     %w{list revoke generate sign print verify fingerprint}.each do |cmd|
       short = cmd[0,1]
       [cmd, "--#{cmd}", "-#{short}"].each do |option|
@@ -229,6 +203,16 @@ describe Puppet::Application::Cert do
 
         args.should == ["fun.example.com"]
       end
+    end
+
+    it "should print help and exit if there is no subcommand" do
+      args = []
+      @cert_app.command_line.stubs(:args).returns(args)
+      @cert_app.stubs(:help).returns("I called for help!")
+      @cert_app.expects(:puts).with("I called for help!")
+
+      expect { @cert_app.parse_options }.to exit_with 0
+      @cert_app.subcommand.should be_nil
     end
   end
 end

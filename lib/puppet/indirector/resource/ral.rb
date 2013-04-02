@@ -1,4 +1,10 @@
+require 'puppet/indirector/resource/validator'
+
 class Puppet::Resource::Ral < Puppet::Indirector::Code
+  include Puppet::Resource::Validator
+
+  desc "Manipulate resources with the resource abstraction layer. Only used internally."
+
   def find( request )
     # find by name
     res   = type(request).instances.find { |o| o.name == resource_name(request) }
@@ -27,9 +33,9 @@ class Puppet::Resource::Ral < Puppet::Indirector::Code
 
     catalog = Puppet::Resource::Catalog.new
     catalog.add_resource ral_res
-    catalog.apply
+    transaction = catalog.apply
 
-    ral_res.to_resource
+    [ral_res.to_resource, transaction.report]
   end
 
   private

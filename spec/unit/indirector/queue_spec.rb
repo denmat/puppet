@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 require 'puppet/indirector/queue'
 
 class Puppet::Indirector::Queue::TestClient
@@ -26,15 +25,14 @@ class FooExampleData
   end
 end
 
-describe Puppet::Indirector::Queue, :if => Puppet.features.pson? do
+describe Puppet::Indirector::Queue do
   before :each do
     @model = mock 'model'
     @indirection = stub 'indirection', :name => :my_queue, :register_terminus_type => nil, :model => @model
     Puppet::Indirector::Indirection.stubs(:instance).with(:my_queue).returns(@indirection)
-    @store_class = Class.new(Puppet::Indirector::Queue) do
-      def self.to_s
-        'MyQueue::MyType'
-      end
+    module MyQueue; end
+    @store_class = class MyQueue::MyType < Puppet::Indirector::Queue
+      self
     end
     @store = @store_class.new
 
@@ -48,12 +46,6 @@ describe Puppet::Indirector::Queue, :if => Puppet.features.pson? do
     @request = stub 'request', :key => :me, :instance => @subject
   end
 
-  it "should require PSON" do
-    Puppet.features.expects(:pson?).returns false
-
-    lambda { @store_class.new }.should raise_error(ArgumentError)
-  end
-
   it 'should use the correct client type and queue' do
     @store.queue.should == :my_queue
     @store.client.should be_an_instance_of(Puppet::Indirector::Queue::TestClient)
@@ -62,22 +54,22 @@ describe Puppet::Indirector::Queue, :if => Puppet.features.pson? do
   describe "when saving" do
     it 'should render the instance using pson' do
       @subject.expects(:render).with(:pson)
-      @store.client.stubs(:send_message)
+      @store.client.stubs(:publish_message)
       @store.save(@request)
     end
 
-    it "should send the rendered message to the appropriate queue on the client" do
+    it "should publish the rendered message to the appropriate queue on the client" do
       @subject.expects(:render).returns "mypson"
 
-      @store.client.expects(:send_message).with(:my_queue, "mypson")
+      @store.client.expects(:publish_message).with(:my_queue, "mypson")
 
       @store.save(@request)
     end
 
     it "should catch any exceptions raised" do
-      @store.client.expects(:send_message).raises ArgumentError
+      @store.client.expects(:publish_message).raises ArgumentError
 
-      lambda { @store.save(@request) }.should raise_error(Puppet::Error)
+      expect { @store.save(@request) }.to raise_error(Puppet::Error)
     end
   end
 
@@ -112,7 +104,7 @@ describe Puppet::Indirector::Queue, :if => Puppet.features.pson? do
     it "should log but not propagate errors" do
       @store_class.client.expects(:subscribe).yields("foo")
       @store_class.expects(:intern).raises(ArgumentError)
-      expect { @store_class.subscribe {|o| o } }.should_not raise_error
+      expect { @store_class.subscribe {|o| o } }.to_not raise_error
 
       @logs.length.should == 1
       @logs.first.message.should =~ /Error occured with subscription to queue my_queue for indirection my_queue: ArgumentError/

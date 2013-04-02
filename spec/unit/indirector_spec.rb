@@ -1,9 +1,67 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/defaults'
 require 'puppet/indirector'
+
+describe Puppet::Indirector, "when configuring routes" do
+  before :each do
+    Puppet::Node.indirection.reset_terminus_class
+    Puppet::Node.indirection.cache_class = nil
+  end
+
+  after :each do
+    Puppet::Node.indirection.reset_terminus_class
+    Puppet::Node.indirection.cache_class = nil
+  end
+
+  it "should configure routes as requested" do
+    routes = {
+      "node" => {
+        "terminus" => "exec",
+        "cache"    => "plain"
+      }
+    }
+
+    Puppet::Indirector.configure_routes(routes)
+
+    Puppet::Node.indirection.terminus_class.should == "exec"
+    Puppet::Node.indirection.cache_class.should    == "plain"
+  end
+
+  it "should fail when given an invalid indirection" do
+    routes = {
+      "fake_indirection" => {
+        "terminus" => "exec",
+        "cache"    => "plain"
+      }
+    }
+
+    expect { Puppet::Indirector.configure_routes(routes) }.to raise_error(/fake_indirection does not exist/)
+  end
+
+  it "should fail when given an invalid terminus" do
+    routes = {
+      "node" => {
+        "terminus" => "fake_terminus",
+        "cache"    => "plain"
+      }
+    }
+
+    expect { Puppet::Indirector.configure_routes(routes) }.to raise_error(/Could not find terminus fake_terminus/)
+  end
+
+  it "should fail when given an invalid cache" do
+    routes = {
+      "node" => {
+        "terminus" => "exec",
+        "cache"    => "fake_cache"
+      }
+    }
+
+    expect { Puppet::Indirector.configure_routes(routes) }.to raise_error(/Could not find terminus fake_cache/)
+  end
+end
 
 describe Puppet::Indirector, " when available to a model" do
   before do
@@ -21,6 +79,12 @@ describe Puppet::Indirector, "when registering an indirection" do
   before do
     @thingie = Class.new do
       extend Puppet::Indirector
+
+      # override Class#name, since we're not naming this ephemeral class
+      def self.name
+        'Thingie'
+      end
+
       attr_reader :name
       def initialize(name)
         @name = name
@@ -29,7 +93,7 @@ describe Puppet::Indirector, "when registering an indirection" do
   end
 
   it "should require a name when registering a model" do
-    Proc.new {@thingie.send(:indirects) }.should raise_error(ArgumentError)
+    expect {@thingie.send(:indirects) }.to raise_error(ArgumentError)
   end
 
   it "should create an indirection instance to manage each indirecting model" do
@@ -40,7 +104,7 @@ describe Puppet::Indirector, "when registering an indirection" do
   it "should not allow a model to register under multiple names" do
     # Keep track of the indirection instance so we can delete it on cleanup
     @indirection = @thingie.indirects :first
-    Proc.new { @thingie.indirects :second }.should raise_error(ArgumentError)
+    expect { @thingie.indirects :second }.to raise_error(ArgumentError)
   end
 
   it "should make the indirection available via an accessor" do
@@ -50,7 +114,7 @@ describe Puppet::Indirector, "when registering an indirection" do
 
   it "should pass any provided options to the indirection during initialization" do
     klass = mock 'terminus class'
-    Puppet::Indirector::Indirection.expects(:new).with(@thingie, :first, {:some => :options})
+    Puppet::Indirector::Indirection.expects(:new).with(@thingie, :first, {:some => :options, :indirected_class => 'Thingie'})
     @indirection = @thingie.indirects :first, :some => :options
   end
 

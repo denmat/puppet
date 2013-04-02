@@ -8,8 +8,6 @@ class Puppet::Parser::AST
 
     attr_accessor :name, :value, :append
 
-    @settor = true
-
     # Look up our name and value, and store them appropriately.  The
     # lexer strips off the syntax stuff like '$'.
     def evaluate(scope)
@@ -20,7 +18,7 @@ class Puppet::Parser::AST
         name = @name.safeevaluate(scope)
 
         parsewrap do
-          scope.setvar(name,value, :file => @file, :line => @line, :append => @append)
+          scope.setvar(name,value, :file => file, :line => line, :append => @append)
         end
       end
     end

@@ -1,10 +1,10 @@
 Puppet::Reports.register_report(:rrdgraph) do
   desc "Graph all available data about hosts using the RRD library.  You
     must have the Ruby RRDtool library installed to use this report, which
-    you can get from 
-    [the RubyRRDTool RubyForge page](http://rubyforge.org/projects/rubyrrdtool/).  
-    This package may also be available as `ruby-rrd` or `rrdtool-ruby` in your 
-    distribution's package management system.  The library and/or package will both 
+    you can get from
+    [the RubyRRDTool RubyForge page](http://rubyforge.org/projects/rubyrrdtool/).
+    This package may also be available as `ruby-rrd` or `rrdtool-ruby` in your
+    distribution's package management system.  The library and/or package will both
     require the binary `rrdtool` package from your distribution to be installed.
 
     This report will create, manage, and graph RRD database files for each
@@ -95,8 +95,8 @@ Puppet::Reports.register_report(:rrdgraph) do
 
     unless File.directory?(hostdir) and FileTest.writable?(hostdir)
       # Some hackishness to create the dir with all of the right modes and ownership
-      config = Puppet::Util::Settings.new
-      config.setdefaults(:reports, :hostdir => {:default => hostdir, :owner => 'service', :mode => 0755, :group => 'service', :desc => "eh"})
+      config = Puppet::Settings.new
+      config.define_settings(:reports, :hostdir => {:type => :directory, :default => hostdir, :owner => 'service', :mode => 0755, :group => 'service', :desc => "eh"})
 
       # This creates the dir.
       config.use(:reports)

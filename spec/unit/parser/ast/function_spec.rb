@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe Puppet::Parser::AST::Function do
   before :each do
@@ -55,7 +54,7 @@ describe Puppet::Parser::AST::Function do
       func = Puppet::Parser::AST::Function.new :name => "exist", :ftype => :statement, :arguments => argument
       @scope.stubs(:function_exist)
 
-      argument.expects(:safeevaluate).with(@scope).returns("argument")
+      argument.expects(:safeevaluate).with(@scope).returns(["argument"])
 
       func.evaluate(@scope)
     end

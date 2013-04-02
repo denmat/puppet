@@ -1,37 +1,55 @@
 # The standard init-based service type.  Many other service types are
 # customizations of this module.
 Puppet::Type.type(:service).provide :init, :parent => :base do
-  desc "Standard init service management.
+  desc "Standard `init`-style service management."
 
-  This provider assumes that the init script has no `status` command,
-  because so few scripts do, so you need to either provide a status
-  command or specify via `hasstatus` that one already exists in the
-  init script.
-
-"
-
-  class << self
-    attr_accessor :defpath
-  end
-
-  case Facter["operatingsystem"].value
-  when "FreeBSD"
-    @defpath = ["/etc/rc.d", "/usr/local/etc/rc.d"]
-  when "HP-UX"
-    @defpath = "/sbin/init.d"
-  else
-    @defpath = "/etc/init.d"
+  def self.defpath
+    case Facter.value(:operatingsystem)
+    when "FreeBSD", "DragonFly"
+      ["/etc/rc.d", "/usr/local/etc/rc.d"]
+    when "HP-UX"
+      "/sbin/init.d"
+    when "Archlinux"
+      "/etc/rc.d"
+    else
+      "/etc/init.d"
+    end
   end
 
   # We can't confine this here, because the init path can be overridden.
-  #confine :exists => @defpath
+  #confine :exists => defpath
+
+  # some init scripts are not safe to execute, e.g. we do not want
+  # to suddently run /etc/init.d/reboot.sh status and reboot our system. The
+  # exclude list could be platform agnostic but I assume an invalid init script
+  # on system A will never be a valid init script on system B
+  def self.excludes
+    excludes = []
+    # these exclude list was found with grep -L '\/sbin\/runscript' /etc/init.d/* on gentoo
+    excludes += %w{functions.sh reboot.sh shutdown.sh}
+    # this exclude list is all from /sbin/service (5.x), but I did not exclude kudzu
+    excludes += %w{functions halt killall single linuxconf reboot boot}
+    # 'wait-for-state' and 'portmap-wait' are excluded from instances here
+    # because they take parameters that have unclear meaning. It looks like
+    # 'wait-for-state' is a generic waiter mainly used internally for other
+    # upstart services as a 'sleep until something happens'
+    # (http://lists.debian.org/debian-devel/2012/02/msg01139.html), while
+    # 'portmap-wait' is a specific instance of a waiter. There is an open
+    # launchpad bug
+    # (https://bugs.launchpad.net/ubuntu/+source/upstart/+bug/962047) that may
+    # eventually explain how to use the wait-for-state service or perhaps why
+    # it should remain excluded. When that bug is adddressed this should be
+    # reexamined.
+    excludes += %w{wait-for-state portmap-wait}
+    excludes
+  end
 
   # List all services of this type.
   def self.instances
     get_services(self.defpath)
   end
 
-  def self.get_services(defpath, exclude=[])
+  def self.get_services(defpath, exclude = self.excludes)
     defpath = [defpath] unless defpath.is_a? Array
     instances = []
     defpath.each do |path|
@@ -49,6 +67,7 @@ Puppet::Type.type(:service).provide :init, :parent => :base do
         next if name =~ /^\./
         next if exclude.include? name
         next if not FileTest.executable?(fullpath)
+        next if not is_init?(fullpath)
         instances << new(:name => name, :path => path, :hasstatus => true)
       end
     end
@@ -75,7 +94,7 @@ Puppet::Type.type(:service).provide :init, :parent => :base do
       if File.directory?(path)
         true
       else
-        if File.exist?(path) and ! File.directory?(path)
+        if File.exist?(path)
           self.debug "Search path #{path} is not a directory"
         else
           self.debug "Search path #{path} does not exist"
@@ -137,5 +156,10 @@ Puppet::Type.type(:service).provide :init, :parent => :base do
     (@resource[:hasstatus] == :true) && [initscript, :status]
   end
 
+private
+
+  def self.is_init?(script = initscript)
+    !File.symlink?(script) || File.readlink(script) != "/lib/init/upstart-job"
+  end
 end
 

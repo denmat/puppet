@@ -1,14 +1,10 @@
-#!/usr/bin/env ruby
-#
-#  Created by Luke Kanies on 2007-9-12.
-#  Copyright (c) 2006. All rights reserved.
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 require 'shared_behaviours/all_parsedfile_providers'
 
 provider_class = Puppet::Type.type(:mount).provider(:parsed)
 
-describe provider_class do
+describe provider_class, :unless => Puppet.features.microsoft_windows? do
 
   before :each do
     @mount_class = Puppet::Type.type(:mount)
@@ -17,12 +13,12 @@ describe provider_class do
 
   # LAK:FIXME I can't mock Facter because this test happens at parse-time.
   it "should default to /etc/vfstab on Solaris" do
-    pending "This test only works on Solaris" unless Facter.value(:operatingsystem) == 'Solaris'
+    pending "This test only works on Solaris" unless Facter.value(:osfamily) == 'Solaris'
     Puppet::Type.type(:mount).provider(:parsed).default_target.should == '/etc/vfstab'
   end
 
   it "should default to /etc/fstab on anything else" do
-    pending "This test does not work on Solaris" if Facter.value(:operatingsystem) == 'Solaris'
+    pending "This test does not work on Solaris" if Facter.value(:osfamily) == 'Solaris'
     Puppet::Type.type(:mount).provider(:parsed).default_target.should == '/etc/fstab'
   end
 
@@ -39,7 +35,7 @@ FSTAB
 #   it_should_behave_like "all parsedfile providers",
 #     provider_class, my_fixtures('*.fstab')
 
-    describe "on Solaris", :if => Facter.value(:operatingsystem) == 'Solaris' do
+    describe "on Solaris", :if => Facter.value(:osfamily) == 'Solaris' do
 
       before :each do
         @example_line = "/dev/dsk/c0d0s0 /dev/rdsk/c0d0s0 \t\t    /  \t    ufs     1 no\t-"
@@ -75,7 +71,7 @@ FSTAB
 
     end
 
-    describe "on other platforms than Solaris", :if => Facter.value(:operatingsystem) != 'Solaris' do
+    describe "on other platforms than Solaris", :if => Facter.value(:osfamily) != 'Solaris' do
 
       before :each do
         @example_line = "/dev/vg00/lv01\t/spare   \t  \t   ext3    defaults\t1 2"
@@ -111,7 +107,7 @@ FSTAB
 
   describe "mountinstances" do
     it "should get name from mountoutput found on Solaris" do
-      Facter.stubs(:value).with(:operatingsystem).returns 'Solaris'
+      Facter.stubs(:value).with(:osfamily).returns 'Solaris'
       @provider.stubs(:mountcmd).returns(File.read(my_fixture('solaris.mount')))
       mounts = @provider.mountinstances
       mounts.size.should == 6
@@ -124,7 +120,7 @@ FSTAB
     end
 
     it "should get name from mountoutput found on HP-UX" do
-      Facter.stubs(:value).with(:operatingsystem).returns 'HP-UX'
+      Facter.stubs(:value).with(:osfamily).returns 'HP-UX'
       @provider.stubs(:mountcmd).returns(File.read(my_fixture('hpux.mount')))
       mounts = @provider.mountinstances
       mounts.size.should == 17
@@ -148,7 +144,7 @@ FSTAB
     end
 
     it "should get name from mountoutput found on Darwin" do
-      Facter.stubs(:value).with(:operatingsystem).returns 'Darwin'
+      Facter.stubs(:value).with(:osfamily).returns 'Darwin'
       @provider.stubs(:mountcmd).returns(File.read(my_fixture('darwin.mount')))
       mounts = @provider.mountinstances
       mounts.size.should == 6
@@ -161,7 +157,7 @@ FSTAB
     end
 
     it "should get name from mountoutput found on Linux" do
-      Facter.stubs(:value).with(:operatingsystem).returns 'Gentoo'
+      Facter.stubs(:value).with(:osfamily).returns 'Gentoo'
       @provider.stubs(:mountcmd).returns(File.read(my_fixture('linux.mount')))
       mounts = @provider.mountinstances
       mounts[0].should == { :name => '/', :mounted => :yes }
@@ -172,7 +168,7 @@ FSTAB
     end
 
     it "should get name from mountoutput found on AIX" do
-      Facter.stubs(:value).with(:operatingsystem).returns 'AIX'
+      Facter.stubs(:value).with(:osfamily).returns 'AIX'
       @provider.stubs(:mountcmd).returns(File.read(my_fixture('aix.mount')))
       mounts = @provider.mountinstances
       mounts[0].should == { :name => '/', :mounted => :yes }
@@ -193,9 +189,53 @@ FSTAB
 
   my_fixtures('*.fstab').each do |fstab|
     platform = File.basename(fstab, '.fstab')
+
+    describe "when calling instances on #{platform}" do
+      before :each do
+        if Facter[:osfamily] == "Solaris" then
+          platform == 'solaris' or
+            pending "We need to stub the operatingsystem fact at load time, but can't"
+        else
+          platform != 'solaris' or
+            pending "We need to stub the operatingsystem fact at load time, but can't"
+        end
+
+        # Stub the mount output to our fixture.
+        begin
+          mount = my_fixture(platform + '.mount')
+          @provider.stubs(:mountcmd).returns File.read(mount)
+        rescue
+          pending "is #{platform}.mount missing at this point?"
+        end
+
+        # Note: we have to stub default_target before creating resources
+        # because it is used by Puppet::Type::Mount.new to populate the
+        # :target property.
+        @provider.stubs(:default_target).returns fstab
+        @retrieve = @provider.instances.collect { |prov| {:name => prov.get(:name), :ensure => prov.get(:ensure)}}
+      end
+
+      # Following mountpoint are present in all fstabs/mountoutputs
+      it "should include unmounted resources" do
+        pending("Solaris:Unable to stub Operating System Fact at runtime", :if => Facter.value(:osfamily) == 'Solaris' )
+        @retrieve.should include(:name => '/', :ensure => :mounted)
+      end
+
+      it "should include mounted resources" do
+        pending("Solaris:Unable to stub Operating System Fact at runtime", :if => Facter.value(:osfamily) == "Solaris")
+        @retrieve.should include(:name => '/boot', :ensure => :unmounted)
+      end
+
+      it "should include ghost resources" do
+        pending("Solaris:Unable to stub Operating System Fact at runtime", :if => Facter.value(:osfamily) == "Solaris")
+        @retrieve.should include(:name => '/ghost', :ensure => :ghost)
+      end
+
+    end
+
     describe "when prefetching on #{platform}" do
       before :each do
-        if Facter[:operatingsystem] == "Solaris" then
+        if Facter[:osfamily] == "Solaris" then
           platform == 'solaris' or
             pending "We need to stub the operatingsystem fact at load time, but can't"
         else
@@ -229,16 +269,19 @@ FSTAB
       end
 
       it "should set :ensure to :unmounted if found in fstab but not mounted" do
+        pending("Solaris:Unable to stub Operating System Fact at runtime", :if => Facter.value(:osfamily) == "Solaris")
         @provider.prefetch(@resource_hash)
         @res_unmounted.provider.get(:ensure).should == :unmounted
       end
 
       it "should set :ensure to :ghost if not found in fstab but mounted" do
+        pending("Solaris:Unable to stub Operating System Fact at runtime", :if => Facter.value(:osfamily) == "Solaris")
         @provider.prefetch(@resource_hash)
         @res_ghost.provider.get(:ensure).should == :ghost
       end
 
       it "should set :ensure to :mounted if found in fstab and mounted" do
+        pending("Solaris:Unable to stub Operating System Fact at runtime", :if => Facter.value(:osfamily) == "Solaris")
         @provider.prefetch(@resource_hash)
         @res_mounted.provider.get(:ensure).should == :mounted
       end

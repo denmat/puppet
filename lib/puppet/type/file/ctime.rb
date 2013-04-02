@@ -4,13 +4,13 @@ module Puppet
 
     def retrieve
       current_value = :absent
-      if stat = @resource.stat(false)
+      if stat = @resource.stat
         current_value = stat.ctime
       end
       current_value
     end
 
-    validate do
+    validate do |val|
       fail "ctime is read-only"
     end
   end

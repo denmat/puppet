@@ -1,18 +1,16 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/application/master'
 require 'puppet/daemon'
 require 'puppet/network/server'
 
-describe Puppet::Application::Master do
+describe Puppet::Application::Master, :unless => Puppet.features.microsoft_windows? do
   before :each do
     @master = Puppet::Application[:master]
     @daemon = stub_everything 'daemon'
     Puppet::Daemon.stubs(:new).returns(@daemon)
     Puppet::Util::Log.stubs(:newdestination)
-    Puppet::Util::Log.stubs(:level=)
 
     Puppet::Node.indirection.stubs(:terminus_class=)
     Puppet::Node.indirection.stubs(:cache_class=)
@@ -27,16 +25,8 @@ describe Puppet::Application::Master do
     @master.class.run_mode.name.should equal(:master)
   end
 
-  it "should ask Puppet::Application to parse Puppet configuration file" do
-    @master.should_parse_config?.should be_true
-  end
-
   it "should declare a main command" do
     @master.should respond_to(:main)
-  end
-
-  it "should declare a parseonly command" do
-    @master.should respond_to(:parseonly)
   end
 
   it "should declare a compile command" do
@@ -109,14 +99,23 @@ describe Puppet::Application::Master do
 
       @master.parse_options
     end
+
+    it "should support dns alt names from ARGV" do
+      Puppet.settings.initialize_global_settings(["--dns_alt_names", "foo,bar,baz"])
+
+      @master.preinit
+      @master.parse_options
+
+      Puppet[:dns_alt_names].should == "foo,bar,baz"
+    end
+
+
   end
 
   describe "during setup" do
-
     before :each do
       Puppet::Log.stubs(:newdestination)
       Puppet.stubs(:settraps)
-      Puppet::Log.stubs(:level=)
       Puppet::SSL::CertificateAuthority.stubs(:instance)
       Puppet::SSL::CertificateAuthority.stubs(:ca?)
       Puppet.settings.stubs(:use)
@@ -124,20 +123,22 @@ describe Puppet::Application::Master do
       @master.options.stubs(:[]).with(any_parameters)
     end
 
+    it "should abort stating that the master is not supported on Windows" do
+      Puppet.features.stubs(:microsoft_windows?).returns(true)
+
+      expect { @master.setup }.to raise_error(Puppet::Error, /Puppet master is not supported on Microsoft Windows/)
+    end
+
     it "should set log level to debug if --debug was passed" do
       @master.options.stubs(:[]).with(:debug).returns(true)
-
-      Puppet::Log.expects(:level=).with(:debug)
-
       @master.setup
+      Puppet::Log.level.should == :debug
     end
 
     it "should set log level to info if --verbose was passed" do
       @master.options.stubs(:[]).with(:verbose).returns(true)
-
-      Puppet::Log.expects(:level=).with(:info)
-
       @master.setup
+      Puppet::Log.level.should == :info
     end
 
     it "should set console as the log destination if no --logdest and --daemonize" do
@@ -163,28 +164,18 @@ describe Puppet::Application::Master do
     end
 
     it "should print puppet config if asked to in Puppet config" do
-      @master.stubs(:exit)
       Puppet.settings.stubs(:print_configs?).returns(true)
-
-      Puppet.settings.expects(:print_configs)
-
-      @master.setup
+      Puppet.settings.expects(:print_configs).returns(true)
+      expect { @master.setup }.to exit_with 0
     end
 
     it "should exit after printing puppet config if asked to in Puppet config" do
       Puppet.settings.stubs(:print_configs?).returns(true)
-
-      lambda { @master.setup }.should raise_error(SystemExit)
+      expect { @master.setup }.to exit_with 1
     end
 
-    it "should tell Puppet.settings to use :main,:ssl and :master category" do
-      Puppet.settings.expects(:use).with(:main,:master,:ssl)
-
-      @master.setup
-    end
-
-    it "should cache class in yaml" do
-      Puppet::Node.indirection.expects(:cache_class=).with(:yaml)
+    it "should tell Puppet.settings to use :main,:ssl,:master and :metrics category" do
+      Puppet.settings.expects(:use).with(:main,:master,:ssl,:metrics)
 
       @master.setup
     end
@@ -233,106 +224,58 @@ describe Puppet::Application::Master do
       @master.preinit
     end
 
-    it "should dispatch to parseonly if parseonly is set" do
-      Puppet.stubs(:[]).with(:parseonly).returns(true)
-      @master.options[:node] = nil
-
-      @master.expects(:parseonly)
-      @master.run_command
-    end
-
     it "should dispatch to compile if called with --compile" do
       @master.options[:node] = "foo"
       @master.expects(:compile)
       @master.run_command
     end
 
-    it "should dispatch to main if parseonly is not set" do
-      Puppet.stubs(:[]).with(:parseonly).returns(false)
+    it "should dispatch to main otherwise" do
       @master.options[:node] = nil
 
       @master.expects(:main)
       @master.run_command
     end
 
-
-    describe "the parseonly command" do
-      before :each do
-        @environment = Puppet::Node::Environment.new("env")
-        Puppet.stubs(:[]).with(:environment).returns(@environment)
-        Puppet.stubs(:[]).with(:manifest).returns("site.pp")
-        Puppet.stubs(:err)
-        @master.stubs(:exit)
-      end
-
-      it "should use a Puppet Resource Type Collection to parse the file" do
-        @environment.expects(:perform_initial_import)
-        @master.parseonly
-      end
-
-      it "should exit with exit code 0 if no error" do
-        @master.expects(:exit).with(0)
-        @master.parseonly
-      end
-
-      it "should exit with exit code 1 if error" do
-        @environment.stubs(:perform_initial_import).raises(Puppet::ParseError)
-        @master.expects(:exit).with(1)
-        @master.parseonly
-      end
-    end
-
     describe "the compile command" do
       before do
-        Puppet.stubs(:[]).with(:environment)
-        Puppet.stubs(:[]).with(:manifest).returns("site.pp")
+        Puppet[:manifest] = "site.pp"
         Puppet.stubs(:err)
-        @master.stubs(:jj)
-        @master.stubs(:exit)
-        Puppet.features.stubs(:pson?).returns true
-      end
-
-      it "should fail if pson isn't available" do
-        Puppet.features.expects(:pson?).returns false
-        lambda { @master.compile }.should raise_error
+        @master.stubs(:puts)
       end
 
       it "should compile a catalog for the specified node" do
         @master.options[:node] = "foo"
         Puppet::Resource::Catalog.indirection.expects(:find).with("foo").returns Puppet::Resource::Catalog.new
-        $stdout.stubs(:puts)
 
-        @master.compile
+        expect { @master.compile }.to exit_with 0
       end
 
-      it "should convert the catalog to a pure-resource catalog and use 'jj' to pretty-print the catalog" do
+      it "should convert the catalog to a pure-resource catalog and use 'PSON::pretty_generate' to pretty-print the catalog" do
         catalog = Puppet::Resource::Catalog.new
+        PSON.stubs(:pretty_generate)
         Puppet::Resource::Catalog.indirection.expects(:find).returns catalog
 
         catalog.expects(:to_resource).returns("rescat")
 
         @master.options[:node] = "foo"
-        @master.expects(:jj).with("rescat")
+        PSON.expects(:pretty_generate).with('rescat', :allow_nan => true, :max_nesting => false)
 
-        @master.compile
+        expect { @master.compile }.to exit_with 0
       end
 
       it "should exit with error code 30 if no catalog can be found" do
         @master.options[:node] = "foo"
         Puppet::Resource::Catalog.indirection.expects(:find).returns nil
-        @master.expects(:exit).with(30)
         $stderr.expects(:puts)
-
-        @master.compile
+        expect { @master.compile }.to exit_with 30
       end
 
       it "should exit with error code 30 if there's a failure" do
         @master.options[:node] = "foo"
         Puppet::Resource::Catalog.indirection.expects(:find).raises ArgumentError
-        @master.expects(:exit).with(30)
         $stderr.expects(:puts)
-
-        @master.compile
+        expect { @master.compile }.to exit_with 30
       end
     end
 
@@ -346,7 +289,7 @@ describe Puppet::Application::Master do
         Puppet::SSL::CertificateAuthority.stubs(:ca?)
         Process.stubs(:uid).returns(1000)
         Puppet.stubs(:service)
-        Puppet.stubs(:[])
+        Puppet[:daemonize] = false
         Puppet.stubs(:notice)
         Puppet.stubs(:start)
       end
@@ -359,19 +302,6 @@ describe Puppet::Application::Master do
 
       it "should give the server to the daemon" do
         @daemon.expects(:server=).with(@server)
-
-        @master.main
-      end
-
-      it "should create the server with the right XMLRPC handlers" do
-        Puppet::Network::Server.expects(:new).with { |args| args[:xmlrpc_handlers] == [:Status, :FileServer, :Master, :Report, :Filebucket]}
-
-        @master.main
-      end
-
-      it "should create the server with a :ca xmlrpc handler if needed" do
-        Puppet.stubs(:[]).with(:ca).returns(true)
-        Puppet::Network::Server.expects(:new).with { |args| args[:xmlrpc_handlers].include?(:CA) }
 
         @master.main
       end
@@ -399,7 +329,7 @@ describe Puppet::Application::Master do
       end
 
       it "should daemonize if needed" do
-        Puppet.stubs(:[]).with(:daemonize).returns(true)
+        Puppet[:daemonize] = true
 
         @daemon.expects(:daemonize)
 
@@ -416,17 +346,6 @@ describe Puppet::Application::Master do
         before do
           require 'puppet/network/http/rack'
           Puppet::Network::HTTP::Rack.stubs(:new).returns(@app)
-        end
-
-        it "it should create the app with REST and XMLRPC support" do
-          @master.options.stubs(:[]).with(:rack).returns(:true)
-
-          Puppet::Network::HTTP::Rack.expects(:new).with { |args|
-            args[:xmlrpc_handlers] == [:Status, :FileServer, :Master, :Report, :Filebucket] and
-            args[:protocols] == [:rest, :xmlrpc]
-          }
-
-          @master.main
         end
 
         it "it should not start a daemon" do

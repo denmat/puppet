@@ -20,30 +20,33 @@
 
 shared_examples_for "all pathname parameters with arrays" do |win32|
   path_types = {
-    "unix absolute"  => "/foo/bar",
-    "unix relative"  => "foo/bar",
-    "win32 absolute" => %q{\foo\bar},
-    "win32 relative" => %q{foo\bar},
-    "drive absolute" => %q{c:\foo\bar},
-    "drive relative" => %q{c:foo\bar}
+    "unix absolute"            => %q{/foo/bar},
+    "unix relative"            => %q{foo/bar},
+    "win32 non-drive absolute" => %q{\foo\bar},
+    "win32 non-drive relative" => %q{foo\bar},
+    "win32 drive absolute"     => %q{c:\foo\bar},
+    "win32 drive relative"     => %q{c:foo\bar}
   }
 
   describe "when given an array of paths" do
     (1..path_types.length).each do |n|
       path_types.keys.combination(n) do |set|
         data = path_types.collect { |k, v| set.member?(k) ? v : nil } .compact
-        reject = true
-        only_absolute = set.find { |k| k =~ /relative/ } .nil?
-        only_unix     = set.reject { |k| k =~ /unix/ } .length == 0
 
-        if only_absolute and (only_unix or win32) then
+        has_relative = set.find { |k| k =~ /relative/ or k =~ /non-drive/ }
+        has_windows = set.find { |k| k =~ /win32/ }
+        has_unix = set.find { |k| k =~ /unix/ }
+
+        if has_relative or (has_windows and !win32) or (has_unix and win32)
+          reject = true
+        else
           reject = false
         end
 
         it "should #{reject ? 'reject' : 'accept'} #{set.join(", ")}" do
           if reject then
             expect { instance(data) }.
-              should raise_error Puppet::Error, /fully qualified/
+              to raise_error Puppet::Error, /fully qualified/
           else
             instance = instance(data)
             instance[@param].should == data
@@ -53,7 +56,7 @@ shared_examples_for "all pathname parameters with arrays" do |win32|
         it "should #{reject ? 'reject' : 'accept'} #{set.join(", ")} doubled" do
           if reject then
             expect { instance(data + data) }.
-              should raise_error Puppet::Error, /fully qualified/
+              to raise_error Puppet::Error, /fully qualified/
           else
             instance = instance(data + data)
             instance[@param].should == (data + data)
@@ -84,26 +87,7 @@ shared_examples_for "all path parameters" do |param, options|
     @param = param
   end
 
-  before :each do
-    @file_separator = File::SEPARATOR
-  end
-  after :each do
-    with_verbose_disabled do
-      verbose, $VERBOSE = $VERBOSE, nil
-      File::SEPARATOR = @file_separator
-      $VERBOSE = verbose
-    end
-  end
-
-  describe "on a Unix-like platform it" do
-    before :each do
-      with_verbose_disabled do
-        File::SEPARATOR = '/'
-      end
-      Puppet.features.stubs(:microsoft_windows?).returns(false)
-      Puppet.features.stubs(:posix?).returns(true)
-    end
-
+  describe "on a Unix-like platform it", :as_platform => :posix do
     if array then
       it_should_behave_like "all pathname parameters with arrays", false
     end
@@ -117,7 +101,7 @@ shared_examples_for "all path parameters" do |param, options|
     it "should give a useful error when the path is not absolute" do
       path = 'foo'
       expect { instance(path) }.
-        should raise_error Puppet::Error, /fully qualified/
+        to raise_error Puppet::Error, /fully qualified/
     end
 
     { "Unix" => '/', "Win32" => '\\' }.each do |style, slash|
@@ -125,39 +109,30 @@ shared_examples_for "all path parameters" do |param, options|
         it "should reject drive letter '#{drive}' with #{style} path separators" do
           path = "#{drive}:#{slash}Program Files"
           expect { instance(path) }.
-            should raise_error Puppet::Error, /fully qualified/
+            to raise_error Puppet::Error, /fully qualified/
         end
       end
     end
   end
 
-  describe "on a Windows-like platform it" do
-    before :each do
-      with_verbose_disabled do
-        File::SEPARATOR = '\\'
-      end
-      Puppet.features.stubs(:microsoft_windows?).returns(true)
-      Puppet.features.stubs(:posix?).returns(false)
-    end
-
+  describe "on a Windows-like platform it", :as_platform => :windows do
     if array then
       it_should_behave_like "all pathname parameters with arrays", true
     end
 
-    it "should accept a fully qualified path" do
-      path = File.join('', 'foo')
-      instance = instance(path)
-      instance[@param].should == path
+    it "should reject a fully qualified unix path" do
+      path = '/foo'
+      expect { instance(path) }.to raise_error(Puppet::Error, /fully qualified/)
     end
 
     it "should give a useful error when the path is not absolute" do
       path = 'foo'
       expect { instance(path) }.
-        should raise_error Puppet::Error, /fully qualified/
+        to raise_error Puppet::Error, /fully qualified/
     end
 
     it "also accepts Unix style path separators" do
-      path = '/Program Files'
+      path = 'C:/Program Files'
       instance = instance(path)
       instance[@param].should == path
     end
@@ -172,9 +147,9 @@ shared_examples_for "all path parameters" do |param, options|
       end
     end
 
-    { "UNC paths"            => %q{\\foo\bar},
-      "unparsed local paths" => %q{\\?\c:\foo},
-      "unparsed UNC paths"   => %q{\\?\foo\bar}
+    { "UNC paths"            => %q{\\\\foo\bar},
+      "unparsed local paths" => %q{\\\\?\c:\foo},
+      "unparsed UNC paths"   => %q{\\\\?\foo\bar}
     }.each do |name, path|
       it "should accept #{name} as absolute" do
         instance = instance(path)

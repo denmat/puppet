@@ -1,13 +1,14 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 describe Puppet::Parser::AST::ArithmeticOperator do
 
   ast = Puppet::Parser::AST
 
   before :each do
-    @scope = Puppet::Parser::Scope.new
+    node     = Puppet::Node.new('localhost')
+    compiler = Puppet::Parser::Compiler.new(node)
+    @scope   = Puppet::Parser::Scope.new(compiler)
     @one = stub 'lval', :safeevaluate => 1
     @two = stub 'rval', :safeevaluate => 2
   end
@@ -23,7 +24,7 @@ describe Puppet::Parser::AST::ArithmeticOperator do
   end
 
   it "should fail for an unknown operator" do
-    lambda { operator = ast::ArithmeticOperator.new :lval => @one, :operator => "%", :rval => @two }.should raise_error
+    lambda { operator = ast::ArithmeticOperator.new :lval => @one, :operator => "^", :rval => @two }.should raise_error
   end
 
   it "should call Puppet::Parser::Scope.number?" do
@@ -34,7 +35,7 @@ describe Puppet::Parser::AST::ArithmeticOperator do
   end
 
 
-  %w{ + - * / << >>}.each do |op|
+  %w{ + - * / % << >>}.each do |op|
     it "should call ruby Numeric '#{op}'" do
       one = stub 'one'
       two = stub 'two'
@@ -58,16 +59,6 @@ describe Puppet::Parser::AST::ArithmeticOperator do
     one = stub 'one', :safeevaluate => 1.80
     operator = ast::ArithmeticOperator.new :lval => two, :operator => "+", :rval => one
     operator.evaluate(@scope).should == 4.33
-  end
-
-  it "should work for variables too" do
-    @scope.expects(:lookupvar).with("one", false).returns(1)
-    @scope.expects(:lookupvar).with("two", false).returns(2)
-    one = ast::Variable.new( :value => "one" )
-    two = ast::Variable.new( :value => "two" )
-
-    operator = ast::ArithmeticOperator.new :lval => one, :operator => "+", :rval => two
-    operator.evaluate(@scope).should == 3
   end
 
 end

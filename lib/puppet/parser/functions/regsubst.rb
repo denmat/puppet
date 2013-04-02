@@ -1,7 +1,32 @@
-module Puppet::Parser::Functions
+# Copyright (C) 2009 Thomas Bellman
+#
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software and associated documentation files (the
+# "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish,
+# distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so, subject to
+# the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+# IN NO EVENT SHALL THOMAS BELLMAN BE LIABLE FOR ANY CLAIM, DAMAGES OR
+# OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+# ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+# OTHER DEALINGS IN THE SOFTWARE.
+#
+# Except as contained in this notice, the name of Thomas Bellman shall
+# not be used in advertising or otherwise to promote the sale, use or
+# other dealings in this Software without prior written authorization
+# from Thomas Bellman.
 
-  newfunction(
+Puppet::Parser::Functions::newfunction(
   :regsubst, :type => :rvalue,
+  :arity => -4,
 
   :doc => "
 Perform regexp replacement on a string or array of strings.
@@ -30,64 +55,62 @@ Get the third octet from the node's IP address:
 Put angle brackets around each octet in the node's IP address:
 
     $x = regsubst($ipaddress, '([0-9]+)', '<\\1>', 'G')
-") \
-  do |args|
-    unless args.length.between?(3, 5)
+") do |args|
+  unless args.length.between?(3, 5)
 
-      raise(
-        Puppet::ParseError,
+    raise(
+      ArgumentError,
 
-          "regsubst(): got #{args.length} arguments, expected 3 to 5")
-    end
-    target, regexp, replacement, flags, lang = args
-    reflags = 0
-    operation = :sub
-    if flags == nil
-      flags = []
-    elsif flags.respond_to?(:split)
-      flags = flags.split('')
-    else
-
-      raise(
-        Puppet::ParseError,
-
-          "regsubst(): bad flags parameter #{flags.class}:`#{flags}'")
-    end
-    flags.each do |f|
-      case f
-      when 'G' then operation = :gsub
-      when 'E' then reflags |= Regexp::EXTENDED
-      when 'I' then reflags |= Regexp::IGNORECASE
-      when 'M' then reflags |= Regexp::MULTILINE
-      else raise(Puppet::ParseError, "regsubst(): bad flag `#{f}'")
-      end
-    end
-    begin
-      re = Regexp.compile(regexp, reflags, lang)
-    rescue RegexpError, TypeError
-
-      raise(
-        Puppet::ParseError,
-
-          "regsubst(): Bad regular expression `#{regexp}'")
-    end
-    if target.respond_to?(operation)
-      # String parameter -> string result
-      result = target.send(operation, re, replacement)
-    elsif target.respond_to?(:collect) and
-      target.respond_to?(:all?) and
-      target.all? { |e| e.respond_to?(operation) }
-      # Array parameter -> array result
-      result = target.collect { |e|
-        e.send(operation, re, replacement)
-      }
-    else
-
-      raise(
-        Puppet::ParseError,
-
-          "regsubst(): bad target #{target.class}:`#{target}'")
-    end
-    return result
+        "regsubst(): got #{args.length} arguments, expected 3 to 5")
   end
+  target, regexp, replacement, flags, lang = args
+  reflags = 0
+  operation = :sub
+  if flags == nil
+    flags = []
+  elsif flags.respond_to?(:split)
+    flags = flags.split('')
+  else
+
+    raise(
+      Puppet::ParseError,
+
+        "regsubst(): bad flags parameter #{flags.class}:`#{flags}'")
+  end
+  flags.each do |f|
+    case f
+    when 'G' then operation = :gsub
+    when 'E' then reflags |= Regexp::EXTENDED
+    when 'I' then reflags |= Regexp::IGNORECASE
+    when 'M' then reflags |= Regexp::MULTILINE
+    else raise(Puppet::ParseError, "regsubst(): bad flag `#{f}'")
+    end
+  end
+  begin
+    re = Regexp.compile(regexp, reflags, lang)
+  rescue RegexpError, TypeError
+
+    raise(
+      Puppet::ParseError,
+
+        "regsubst(): Bad regular expression `#{regexp}'")
+  end
+  if target.respond_to?(operation)
+    # String parameter -> string result
+    result = target.send(operation, re, replacement)
+  elsif target.respond_to?(:collect) and
+    target.respond_to?(:all?) and
+    target.all? { |e| e.respond_to?(operation) }
+    # Array parameter -> array result
+    result = target.collect { |e|
+      e.send(operation, re, replacement)
+    }
+  else
+
+    raise(
+      Puppet::ParseError,
+
+        "regsubst(): bad target #{target.class}:`#{target}'")
+  end
+  return result
 end

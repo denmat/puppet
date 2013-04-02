@@ -1,23 +1,17 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/application/queue'
 require 'puppet/indirector/catalog/queue'
 
-describe Puppet::Application::Queue do
+describe Puppet::Application::Queue, :unless => Puppet.features.microsoft_windows? do
   before :each do
     @queue = Puppet::Application[:queue]
     @queue.stubs(:puts)
-    @daemon = stub_everything 'daemon', :daemonize => nil
+    @daemon = stub_everything 'daemon'
     Puppet::Util::Log.stubs(:newdestination)
-    Puppet::Util::Log.stubs(:level=)
 
     Puppet::Resource::Catalog.indirection.stubs(:terminus_class=)
-  end
-
-  it "should ask Puppet::Application to parse Puppet configuration file" do
-    @queue.should_parse_config?.should be_true
   end
 
   it "should declare a main command" do
@@ -72,6 +66,7 @@ describe Puppet::Application::Queue do
 
   describe "during setup" do
     before :each do
+      @queue.preinit
       @queue.options.stubs(:[])
       @queue.daemon.stubs(:daemonize)
       Puppet.stubs(:info)
@@ -87,19 +82,20 @@ describe Puppet::Application::Queue do
       lambda { @queue.setup }.should raise_error(ArgumentError)
     end
 
-    it "should print puppet config if asked to in Puppet config" do
-      @queue.stubs(:exit)
-      Puppet.settings.stubs(:print_configs?).returns(true)
-
-      Puppet.settings.expects(:print_configs)
-
+    it "should issue a warning that queue is deprecated" do
+      Puppet.expects(:warning).with() { |msg| msg =~ /queue is deprecated/ }
       @queue.setup
+    end
+
+    it "should print puppet config if asked to in Puppet config" do
+      Puppet.settings.stubs(:print_configs?).returns(true)
+      Puppet.settings.expects(:print_configs).returns(true)
+      expect { @queue.setup }.to exit_with 0
     end
 
     it "should exit after printing puppet config if asked to in Puppet config" do
       Puppet.settings.stubs(:print_configs?).returns(true)
-
-      lambda { @queue.setup }.should raise_error(SystemExit)
+      expect { @queue.setup }.to exit_with 1
     end
 
     it "should call setup_logs" do
@@ -114,18 +110,14 @@ describe Puppet::Application::Queue do
 
       it "should set log level to debug if --debug was passed" do
         @queue.options.stubs(:[]).with(:debug).returns(true)
-
-        Puppet::Util::Log.expects(:level=).with(:debug)
-
         @queue.setup_logs
+        Puppet::Util::Log.level.should == :debug
       end
 
       it "should set log level to info if --verbose was passed" do
         @queue.options.stubs(:[]).with(:verbose).returns(true)
-
-        Puppet::Util::Log.expects(:level=).with(:info)
-
         @queue.setup_logs
+        Puppet::Util::Log.level.should == :info
       end
 
       [:verbose, :debug].each do |level|
@@ -139,14 +131,13 @@ describe Puppet::Application::Queue do
       end
     end
 
-    it "should configure the Catalog class to use ActiveRecord" do
-      Puppet::Resource::Catalog.indirection.expects(:terminus_class=).with(:active_record)
-
+    it "should configure the Catalog class to use StoreConfigs" do
+      Puppet::Resource::Catalog.indirection.expects(:terminus_class=).with(:store_configs)
       @queue.setup
     end
 
     it "should daemonize if needed" do
-      Puppet.expects(:[]).with(:daemonize).returns(true)
+      Puppet[:daemonize] = true
 
       @queue.daemon.expects(:daemonize)
 

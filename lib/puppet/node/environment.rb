@@ -1,3 +1,4 @@
+require 'puppet/util'
 require 'puppet/util/cacher'
 require 'monitor'
 
@@ -54,9 +55,9 @@ class Puppet::Node::Environment
     @root
   end
 
-  # This is only used for testing.
   def self.clear
     @seen.clear
+    Thread.current[:environment] = nil
   end
 
   attr_reader :name
@@ -76,10 +77,10 @@ class Puppet::Node::Environment
     # per environment semantics with an efficient most common cases; we almost
     # always just return our thread's known-resource types.  Only at the start
     # of a compilation (after our thread var has been set to nil) or when the
-    # environment has changed do we delve deeper. 
+    # environment has changed do we delve deeper.
     Thread.current[:known_resource_types] = nil if (krt = Thread.current[:known_resource_types]) && krt.environment != self
     Thread.current[:known_resource_types] ||= synchronize {
-      if @known_resource_types.nil? or @known_resource_types.stale?
+      if @known_resource_types.nil? or @known_resource_types.require_reparse?
         @known_resource_types = Puppet::Resource::TypeCollection.new(self)
         @known_resource_types.import_ast(perform_initial_import, '')
       end
@@ -87,37 +88,106 @@ class Puppet::Node::Environment
     }
   end
 
+  # Yields each modules' plugin directory.
+  #
+  # @yield [String] Yields the plugin directory from each module to the block.
+  # @api public
+  def each_plugin_directory(&block)
+    modules.map(&:plugin_directory).each do |lib|
+      lib = Puppet::Util::Autoload.cleanpath(lib)
+      yield lib if File.directory?(lib)
+    end
+  end
+
   def module(name)
-    mod = Puppet::Module.new(name, self)
-    return nil unless mod.exist?
-    mod
+    modules.find {|mod| mod.name == name}
+  end
+
+  def module_by_forge_name(forge_name)
+    author, modname = forge_name.split('/')
+    found_mod = self.module(modname)
+    found_mod and found_mod.forge_name == forge_name ?
+      found_mod :
+      nil
   end
 
   # Cache the modulepath, so that we aren't searching through
   # all known directories all the time.
-  cached_attr(:modulepath, :ttl => Puppet[:filetimeout]) do
+  cached_attr(:modulepath, Puppet[:filetimeout]) do
     dirs = self[:modulepath].split(File::PATH_SEPARATOR)
     dirs = ENV["PUPPETLIB"].split(File::PATH_SEPARATOR) + dirs if ENV["PUPPETLIB"]
     validate_dirs(dirs)
   end
 
-  # Return all modules from this environment.
+  # Return all modules from this environment, in the order they appear
+  # in the modulepath
   # Cache the list, because it can be expensive to create.
-  cached_attr(:modules, :ttl => Puppet[:filetimeout]) do
-    module_names = modulepath.collect { |path| Dir.entries(path) }.flatten.uniq
-    module_names.collect do |path|
+  cached_attr(:modules, Puppet[:filetimeout]) do
+    module_references = []
+    seen_modules = {}
+    modulepath.each do |path|
+      Dir.entries(path).each do |name|
+        warn_about_mistaken_path(path, name)
+        next if module_references.include?(name)
+        if not seen_modules[name]
+          module_references << {:name => name, :path => File.join(path, name)}
+          seen_modules[name] = true
+        end
+      end
+    end
+
+    module_references.collect do |reference|
       begin
-        Puppet::Module.new(path, self)
+        Puppet::Module.new(reference[:name], reference[:path], self)
       rescue Puppet::Module::Error => e
         nil
       end
     end.compact
   end
 
-  # Cache the manifestdir, so that we aren't searching through
-  # all known directories all the time.
-  cached_attr(:manifestdir, :ttl => Puppet[:filetimeout]) do
-    validate_dirs(self[:manifestdir].split(File::PATH_SEPARATOR))
+  def warn_about_mistaken_path(path, name)
+    if name == "lib"
+      Puppet.debug("Warning: Found directory named 'lib' in module path ('#{path}/lib'); unless " +
+          "you are expecting to load a module named 'lib', your module path may be set " +
+          "incorrectly.")
+    end
+  end
+
+  # Modules broken out by directory in the modulepath
+  def modules_by_path
+    modules_by_path = {}
+    modulepath.each do |path|
+      Dir.chdir(path) do
+        module_names = Dir.glob('*').select do |d|
+          FileTest.directory?(d) && (File.basename(d) =~ /\A\w+(-\w+)*\Z/)
+        end
+        modules_by_path[path] = module_names.sort.map do |name|
+          Puppet::Module.new(name, File.join(path, name), self)
+        end
+      end
+    end
+    modules_by_path
+  end
+
+  def module_requirements
+    deps = {}
+    modules.each do |mod|
+      next unless mod.forge_name
+      deps[mod.forge_name] ||= []
+      mod.dependencies and mod.dependencies.each do |mod_dep|
+        deps[mod_dep['name']] ||= []
+        dep_details = {
+          'name'                => mod.forge_name,
+          'version'             => mod.version,
+          'version_requirement' => mod_dep['version_requirement']
+        }
+        deps[mod_dep['name']] << dep_details
+      end
+    end
+    deps.each do |mod, mod_deps|
+      deps[mod] = mod_deps.sort_by {|d| d['name']}
+    end
+    deps
   end
 
   def to_s
@@ -128,7 +198,7 @@ class Puppet::Node::Environment
     to_s.to_sym
   end
 
-  # The only thing we care about when serializing an environment is its 
+  # The only thing we care about when serializing an environment is its
   # identity; everything else is ephemeral and should not be stored or
   # transmitted.
   def to_zaml(z)
@@ -137,13 +207,9 @@ class Puppet::Node::Environment
 
   def validate_dirs(dirs)
     dirs.collect do |dir|
-      if dir !~ /^#{File::SEPARATOR}/
-        File.join(Dir.getwd, dir)
-      else
-        dir
-      end
+      File.expand_path(dir)
     end.find_all do |p|
-      p =~ /^#{File::SEPARATOR}/ && FileTest.directory?(p)
+      FileTest.directory?(p)
     end
   end
 
@@ -156,11 +222,12 @@ class Puppet::Node::Environment
       parser.string = code
     else
       file = Puppet.settings.value(:manifest, name.to_s)
-      return empty_parse_result unless File.exist?(file)
       parser.file = file
     end
     parser.parse
   rescue => detail
+    known_resource_types.parse_failed = true
+
     msg = "Could not parse for environment #{self}: #{detail}"
     error = Puppet::Error.new(msg)
     error.set_backtrace(detail.backtrace)

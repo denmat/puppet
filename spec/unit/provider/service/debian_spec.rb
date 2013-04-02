@@ -1,9 +1,9 @@
-#!/usr/bin/env ruby
+#! /usr/bin/env ruby
 #
 # Unit testing for the debian service provider
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+require 'spec_helper'
 
 provider_class = Puppet::Type.type(:service).provider(:debian)
 
@@ -52,8 +52,20 @@ describe provider_class do
   end
 
   describe "when disabling" do
-    it "should call update-rc.d twice" do
-      @provider.expects(:update_rc).twice
+    it "should be able to disable services with newer sysv-rc versions" do
+      @provider.stubs(:`).with("dpkg --compare-versions $(dpkg-query -W --showformat '${Version}' sysv-rc) ge 2.88 ; echo $?").returns "0"
+
+      @provider.expects(:update_rc).with(@resource[:name], "disable")
+
+      @provider.disable
+    end
+
+    it "should be able to enable services with older sysv-rc versions" do
+      @provider.stubs(:`).with("dpkg --compare-versions $(dpkg-query -W --showformat '${Version}' sysv-rc) ge 2.88 ; echo $?").returns "1"
+
+      @provider.expects(:update_rc).with("-f", @resource[:name], "remove")
+      @provider.expects(:update_rc).with(@resource[:name], "stop", "00", "1", "2", "3", "4", "5", "6", ".")
+
       @provider.disable
     end
   end
@@ -74,6 +86,21 @@ describe provider_class do
       @provider.stubs(:system)
       $CHILD_STATUS.stubs(:exitstatus).returns(106)
       @provider.enabled?.should == :true
+    end
+
+    context "when invoke-rc.d exits with 105 status" do
+      it "links count is 4" do
+        @provider.stubs(:system)
+        $CHILD_STATUS.stubs(:exitstatus).returns(105)
+        @provider.stubs(:get_start_link_count).returns(4)
+        @provider.enabled?.should == :true
+      end
+      it "links count is less than 4" do
+        @provider.stubs(:system)
+        $CHILD_STATUS.stubs(:exitstatus).returns(105)
+        @provider.stubs(:get_start_link_count).returns(3)
+        @provider.enabled?.should == :false
+      end
     end
 
     # pick a range of non-[104.106] numbers, strings and booleans to test with.

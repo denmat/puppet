@@ -1,6 +1,5 @@
-#!/usr/bin/env ruby
-
-require File.expand_path(File.dirname(__FILE__) + '/../../../spec_helper')
+#! /usr/bin/env ruby
+require 'spec_helper'
 
 require 'puppet/indirector/certificate_revocation_list/rest'
 
@@ -19,5 +18,9 @@ describe Puppet::SSL::CertificateRevocationList::Rest do
 
   it "should set port_setting to :ca_port" do
     Puppet::SSL::CertificateRevocationList::Rest.port_setting.should == :ca_port
+  end
+
+  it "should use the :ca SRV service" do
+    Puppet::SSL::CertificateRevocationList::Rest.srv_service.should == :ca
   end
 end
